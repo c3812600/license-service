@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 from .config import Config
 from .crypto import ensure_keypair
@@ -29,6 +29,16 @@ def _require_admin_token(app):
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+
+    static_dir = Path(__file__).resolve().parent / "static"
+
+    @app.get("/admin")
+    def admin_page():
+        return send_from_directory(static_dir, "admin.html")
+
+    @app.get("/admin/<path:filename>")
+    def admin_static(filename):
+        return send_from_directory(static_dir, filename)
 
     ensure_keypair(app.config["PRIVATE_KEY_PATH"], app.config["PUBLIC_KEY_PATH"])
     init_db(app.config["DATABASE_PATH"])

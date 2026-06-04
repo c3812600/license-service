@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RCC License Admin</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e4e4e7;
+            --text-dim: #8b8d97;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --warn: #f59e0b;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .header {
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .header .tag {
+            background: var(--accent);
+            color: #fff;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 32px auto;
+            padding: 0 24px;
+        }
+
+        .token-bar {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .token-bar label {
+            font-size: 13px;
+            color: var(--text-dim);
+            white-space: nowrap;
+        }
+
+        .token-bar input {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: var(--text);
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .token-bar input:focus {
+            border-color: var(--accent);
+        }
+
+        .token-bar .status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--danger);
+            flex-shrink: 0;
+        }
+
+        .token-bar .status.active {
+            background: var(--success);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 24px;
+            background: var(--card);
+            border-radius: 10px;
+            padding: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-dim);
+            transition: all 0.2s;
+            border: none;
+            background: none;
+        }
+
+        .tab:hover {
+            color: var(--text);
+        }
+
+        .tab.active {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .panel {
+            display: none;
+        }
+
+        .panel.active {
+            display: block;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+        }
+
+        .field {
+            margin-bottom: 16px;
+        }
+
+        .field label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+
+        .field input, .field select {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px 12px;
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .field input:focus, .field select:focus {
+            border-color: var(--accent);
+        }
+
+        .field select {
+            cursor: pointer;
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 8px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .result {
+            margin-top: 20px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            display: none;
+        }
+
+        .result.show {
+            display: block;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .result-header .label {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .result-header .label.ok { color: var(--success); }
+        .result-header .label.err { color: var(--danger); }
+
+        .result pre {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            color: var(--text-dim);
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .license-key {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 12px;
+            word-break: break-all;
+            line-height: 1.6;
+            position: relative;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .copy-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+
+        .info-row:last-child { border-bottom: none; }
+        .info-row .k { color: var(--text-dim); }
+        .info-row .v { font-weight: 500; font-family: 'SF Mono', Monaco, monospace; }
+
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-dim);
+            font-size: 14px;
+        }
+
+        @media (max-width: 600px) {
+            .row { grid-template-columns: 1fr; }
+            .token-bar { flex-wrap: wrap; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>RCC License Admin</h1>
+    <span class="tag">v1.0</span>
+</div>
+
+<div class="container">
+    <!-- Token Bar -->
+    <div class="token-bar">
+        <label>Admin Token</label>
+        <input type="password" id="tokenInput" placeholder="输入管理员 Token...">
+        <div class="status" id="tokenStatus"></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab active" data-tab="query">查询</button>
+        <button class="tab" data-tab="renew">续期</button>
+        <button class="tab" data-tab="offline">离线签发</button>
+    </div>
+
+    <!-- Query Panel -->
+    <div class="panel active" id="panel-query">
+        <div class="card">
+            <div class="row">
+                <div class="field">
+                    <label>应用名称</label>
+                    <select id="q-app">
+                        <option value="ControlCommand">ControlCommand</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>机器码</label>
+                    <input type="text" id="q-machine" placeholder="ABCD-1234-EFGH">
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="doQuery()">查询</button>
+            <div class="result" id="q-result"></div>
+        </div>
+    </div>
+
+    <!-- Renew Panel -->
+    <div class="panel" id="panel-renew">
+        <div class="card">
+            <div class="row">
+                <div class="field">
+                    <label>应用名称</label>
+                    <select id="r-app">
+                        <option value="ControlCommand">ControlCommand</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>授权类型</label>
+                    <select id="r-type">
+                        <option value="paid">付费 (paid)</option>
+                        <option value="trial">试用 (trial)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field">
+                <label>机器码</label>
+                <input type="text" id="r-machine" placeholder="ABCD-1234-EFGH">
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label>到期日期</label>
+                    <input type="date" id="r-expires">
+                </div>
+                <div class="field">
+                    <label>客户名称（可选）</label>
+                    <input type="text" id="r-customer" placeholder="客户名">
+                </div>
+            </div>
+            <div class="field">
+                <label>备注（可选）</label>
+                <input type="text" id="r-notes" placeholder="备注信息">
+            </div>
+            <button class="btn btn-primary" onclick="doRenew()">续期签发</button>
+            <div class="result" id="r-result"></div>
+        </div>
+    </div>
+
+    <!-- Offline Panel -->
+    <div class="panel" id="panel-offline">
+        <div class="card">
+            <div class="row">
+                <div class="field">
+                    <label>应用名称</label>
+                    <select id="o-app">
+                        <option value="ControlCommand">ControlCommand</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>授权类型</label>
+                    <select id="o-type">
+                        <option value="paid">付费 (paid)</option>
+                        <option value="trial">试用 (trial)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field">
+                <label>机器码</label>
+                <input type="text" id="o-machine" placeholder="ABCD-1234-EFGH">
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label>到期日期</label>
+                    <input type="date" id="o-expires">
+                </div>
+                <div class="field">
+                    <label>客户名称（可选）</label>
+                    <input type="text" id="o-customer" placeholder="客户名">
+                </div>
+            </div>
+            <div class="field">
+                <label>备注（可选）</label>
+                <input type="text" id="o-notes" placeholder="备注信息">
+            </div>
+            <button class="btn btn-primary" onclick="doOffline()">离线签发</button>
+            <div class="result" id="o-result"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Config ---
+    const API_BASE = location.origin;
+
+    // --- State ---
+    const tokenInput = document.getElementById('tokenInput');
+    const tokenStatus = document.getElementById('tokenStatus');
+
+    tokenInput.addEventListener('input', () => {
+        tokenStatus.classList.toggle('active', tokenInput.value.trim().length > 0);
+    });
+
+    // --- Tabs ---
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+        });
+    });
+
+    // --- Helpers ---
+    function getToken() {
+        return tokenInput.value.trim();
+    }
+
+    function showResult(id, ok, data) {
+        const el = document.getElementById(id);
+        el.classList.add('show');
+        const labelClass = ok ? 'ok' : 'err';
+        const labelText = ok ? 'SUCCESS' : 'ERROR';
+
+        let html = `<div class="result-header"><span class="label ${labelClass}">${labelText}</span></div>`;
+
+        if (ok && data && data.license_key) {
+            html += `
+                <div class="info-row"><span class="k">Issue ID</span><span class="v">${data.issue_id || '-'}</span></div>
+                <div class="info-row"><span class="k">应用</span><span class="v">${data.app_name || '-'}</span></div>
+                <div class="info-row"><span class="k">类型</span><span class="v">${data.license_type || '-'}</span></div>
+                <div class="info-row"><span class="k">渠道</span><span class="v">${data.channel || '-'}</span></div>
+                <div class="info-row"><span class="k">签发时间</span><span class="v">${data.issued_at || '-'}</span></div>
+                <div class="info-row"><span class="k">到期时间</span><span class="v">${data.expires_at || '-'}</span></div>
+                <div class="info-row"><span class="k">机器码后4位</span><span class="v">${data.machine_code_last4 || '-'}</span></div>
+                <div class="license-key">
+                    <button class="copy-btn" onclick="copyKey(this)">复制</button>
+                    ${data.license_key}
+                </div>
+            `;
+        } else if (ok && data && data.items) {
+            if (data.items.length === 0) {
+                html += `<div class="empty">未找到授权记录</div>`;
+            } else {
+                data.items.forEach((item, i) => {
+                    html += `
+                        <div style="margin-bottom:16px;${i > 0 ? 'border-top:1px solid var(--border);padding-top:16px;' : ''}">
+                            <div class="info-row"><span class="k">Issue ID</span><span class="v">${item.issue_id}</span></div>
+                            <div class="info-row"><span class="k">类型</span><span class="v">${item.license_type}</span></div>
+                            <div class="info-row"><span class="k">渠道</span><span class="v">${item.channel}</span></div>
+                            <div class="info-row"><span class="k">状态</span><span class="v">${item.status}</span></div>
+                            <div class="info-row"><span class="k">签发时间</span><span class="v">${item.issued_at}</span></div>
+                            <div class="info-row"><span class="k">到期时间</span><span class="v">${item.expires_at}</span></div>
+                            <div class="info-row"><span class="k">客户</span><span class="v">${item.customer_name || '-'}</span></div>
+                            <div class="info-row"><span class="k">备注</span><span class="v">${item.notes || '-'}</span></div>
+                            <div class="info-row"><span class="k">创建者</span><span class="v">${item.created_by}</span></div>
+                        </div>
+                    `;
+                });
+            }
+        } else {
+            html += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        }
+
+        el.innerHTML = html;
+    }
+
+    function copyKey(btn) {
+        const key = btn.parentElement.textContent.replace('复制', '').trim();
+        navigator.clipboard.writeText(key).then(() => {
+            btn.textContent = '已复制';
+            setTimeout(() => btn.textContent = '复制', 1500);
+        });
+    }
+
+    async function api(path, options = {}) {
+        const resp = await fetch(API_BASE + path, {
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Admin-Token': getToken(),
+                ...(options.headers || {})
+            }
+        });
+        return resp.json();
+    }
+
+    // --- API Calls ---
+    async function doQuery() {
+        const app = document.getElementById('q-app').value;
+        const machine = document.getElementById('q-machine').value.trim();
+        if (!machine) return alert('请输入机器码');
+
+        const res = await api(`/api/v1/licenses/query?app_name=${encodeURIComponent(app)}&machine_code=${encodeURIComponent(machine)}`);
+        showResult('q-result', res.ok, res.ok ? res.data : res);
+    }
+
+    async function doRenew() {
+        const app = document.getElementById('r-app').value;
+        const machine = document.getElementById('r-machine').value.trim();
+        const expires = document.getElementById('r-expires').value;
+        if (!machine) return alert('请输入机器码');
+        if (!expires) return alert('请选择到期日期');
+
+        const res = await api('/api/v1/licenses/renew', {
+            method: 'POST',
+            body: JSON.stringify({
+                app_name: app,
+                machine_code: machine,
+                expires_at: expires,
+                license_type: document.getElementById('r-type').value,
+                customer_name: document.getElementById('r-customer').value.trim(),
+                notes: document.getElementById('r-notes').value.trim()
+            })
+        });
+        showResult('r-result', res.ok, res.ok ? res.data : res);
+    }
+
+    async function doOffline() {
+        const app = document.getElementById('o-app').value;
+        const machine = document.getElementById('o-machine').value.trim();
+        const expires = document.getElementById('o-expires').value;
+        if (!machine) return alert('请输入机器码');
+        if (!expires) return alert('请选择到期日期');
+
+        const res = await api('/api/v1/licenses/offline-issue', {
+            method: 'POST',
+            body: JSON.stringify({
+                app_name: app,
+                machine_code: machine,
+                expires_at: expires,
+                license_type: document.getElementById('o-type').value,
+                customer_name: document.getElementById('o-customer').value.trim(),
+                notes: document.getElementById('o-notes').value.trim()
+            })
+        });
+        showResult('o-result', res.ok, res.ok ? res.data : res);
+    }
+
+    // Set default date
+    document.getElementById('r-expires').value = new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0];
+    document.getElementById('o-expires').value = new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0];
+</script>
+
+</body>
+</html>
