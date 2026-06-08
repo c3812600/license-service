@@ -1,4 +1,4 @@
-## RCC License Service
+## License Service
 
 为 `ControlCommand`、`E-Player` 和 `WinPilot` 提供的独立授权服务。
 
