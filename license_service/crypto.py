@@ -7,6 +7,14 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
+# App-specific prefixes
+TOKEN_PREFIXES = {
+    "ControlCommand": "RCC1",
+    "E-Player": "EPL",
+    "WinPilot": "WPL",
+}
+
+# Default prefix for backward compatibility
 TOKEN_PREFIX = "RCC1"
 
 
@@ -63,7 +71,8 @@ def _load_private_key(private_key_path):
     return serialization.load_pem_private_key(private_bytes, password=None)
 
 
-def sign_license_payload(payload, private_key_path):
+def sign_license_payload(payload, private_key_path, app_name=None):
+    """Sign license payload with app-specific prefix."""
     private_key = _load_private_key(private_key_path)
     payload_bytes = json.dumps(
         payload,
@@ -72,8 +81,12 @@ def sign_license_payload(payload, private_key_path):
         sort_keys=True,
     ).encode("utf-8")
     signature = private_key.sign(payload_bytes)
+    
+    # Use app-specific prefix if provided
+    prefix = TOKEN_PREFIXES.get(app_name, TOKEN_PREFIX) if app_name else TOKEN_PREFIX
+    
     return "{prefix}.{payload}.{signature}".format(
-        prefix=TOKEN_PREFIX,
+        prefix=prefix,
         payload=_b64url_encode(payload_bytes),
         signature=_b64url_encode(signature),
     )

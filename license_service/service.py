@@ -50,7 +50,7 @@ def _issue_record(
         "customer_name": customer_name,
         "notes": notes,
     }
-    license_token = sign_license_payload(payload, config["PRIVATE_KEY_PATH"])
+    license_token = sign_license_payload(payload, config["PRIVATE_KEY_PATH"], app_name=app_name)
     license_token_hash = hash_license_token(license_token)
 
     execute(

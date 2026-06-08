@@ -1,11 +1,11 @@
 import os
 from pathlib import Path
-
-from license_service import create_app
 from dotenv import load_dotenv
 
-
+# Load .env BEFORE importing anything else
 load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from license_service import create_app
 
 app = create_app()
 

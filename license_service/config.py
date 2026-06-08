@@ -22,7 +22,7 @@ class Config:
     TRIAL_DAYS = int(os.environ.get("LICENSE_SERVICE_TRIAL_DAYS") or "365")
     ALLOWED_APP_NAMES = tuple(
         item.strip()
-        for item in (os.environ.get("LICENSE_SERVICE_ALLOWED_APPS") or "ControlCommand").split(",")
+        for item in (os.environ.get("LICENSE_SERVICE_ALLOWED_APPS") or "ControlCommand,E-Player,WinPilot").split(",")
         if item.strip()
     )
     DATABASE_PATH = _resolve_path(
