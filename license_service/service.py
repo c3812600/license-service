@@ -117,24 +117,46 @@ def validate_app_name(app, app_name):
 
 
 def ensure_trial_available(app, app_name, machine_code):
+    """检查试用是否可用。
+
+    返回值：
+      - None: 首次领取，无历史记录
+      - dict: 已有首次试用记录，包含 issued_at 和 expires_at
+    """
     validate_app_name(app, app_name)
     machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
     existing = fetch_one(
         app.config["DATABASE_PATH"],
         """
-        SELECT issue_id FROM license_issues
+        SELECT issued_at, expires_at FROM license_issues
         WHERE app_name=? AND machine_code_hash=? AND channel='trial_auto'
+        ORDER BY id ASC
         LIMIT 1
         """,
         [app_name, machine_code_hash],
     )
     if existing:
-        raise RuntimeError("trial already claimed")
+        # 已有首次试用记录，检查是否已过期
+        first_issued_at = existing["issued_at"].replace("Z", "")
+        first_issued_date = dt.datetime.fromisoformat(first_issued_at).date()
+        first_expires_date = _parse_date(existing["expires_at"])
+        today = dt.date.today()
+        if today > first_expires_date:
+            # 已过期，不允许再领取
+            raise RuntimeError("trial expired")
+        # 未过期（重装场景），返回首次领取信息用于计算剩余时间
+        return {"issued_at": first_issued_date, "expires_at": first_expires_date}
+    return None
 
 
 def issue_trial_license(app, *, app_name, machine_code, app_version="", client_ip="", user_agent=""):
-    ensure_trial_available(app, app_name, machine_code)
-    expires_at = (dt.date.today() + dt.timedelta(days=app.config["TRIAL_DAYS"])).isoformat()
+    existing_trial = ensure_trial_available(app, app_name, machine_code)
+    if existing_trial:
+        # 已有首次试用记录（未过期），使用首次领取时间 + TRIAL_DAYS 作为到期时间
+        expires_at = (existing_trial["issued_at"] + dt.timedelta(days=app.config["TRIAL_DAYS"])).isoformat()
+    else:
+        # 首次领取或已过期后重新领取，从今天起计算
+        expires_at = (dt.date.today() + dt.timedelta(days=app.config["TRIAL_DAYS"])).isoformat()
     return _issue_record(
         app,
         app_name=app_name,
