@@ -329,6 +329,7 @@
         <button class="tab active" data-tab="query">查询</button>
         <button class="tab" data-tab="renew">续期</button>
         <button class="tab" data-tab="offline">离线签发</button>
+        <button class="tab" data-tab="forget">重置设备</button>
     </div>
 
     <!-- Query Panel -->
@@ -442,6 +443,30 @@
             </div>
             <button class="btn btn-primary" onclick="doOffline()">离线签发</button>
             <div class="result" id="o-result"></div>
+        </div>
+    </div>
+
+    <!-- Forget Panel：删除硬件记录（测试设备重新申请试用） -->
+    <div class="panel" id="panel-forget">
+        <div class="card">
+            <div class="row">
+                <div class="field">
+                    <label>应用名称</label>
+                    <select id="f-app">
+                        <option value="ControlCommand">ControlCommand</option>
+                        <option value="E-Player">E-Player</option>
+                        <option value="WinPilot">WinPilot</option>
+                        <option value="iCMS">iCMS</option>
+                        <option value="rust-node">rust-node</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field">
+                <label>机器码</label>
+                <input type="text" id="f-machine" placeholder="粘贴设备机器码">
+            </div>
+            <button class="btn btn-primary" style="background:#c0392b;border-color:#a93226" onclick="doForget()">删除该设备全部记录</button>
+            <div class="result" id="f-result"></div>
         </div>
     </div>
 </div>
@@ -601,6 +626,19 @@
             })
         });
         showResult('o-result', res.ok, res.ok ? res.data : res);
+    }
+
+    async function doForget() {
+        const app = document.getElementById('f-app').value;
+        const machine = document.getElementById('f-machine').value.trim();
+        if (!machine) return alert('请输入机器码');
+        if (!confirm('将删除该机器码的【全部授权记录 + 设备凭证 + 未用挑战】，不可恢复；\n删除后设备可重新申请试用。确认重置？')) return;
+
+        const res = await api('/api/v1/devices/forget', {
+            method: 'POST',
+            body: JSON.stringify({ app_name: app, machine_code: machine })
+        });
+        showResult('f-result', res.ok, res.ok ? res.data : res);
     }
 
     // Set default date

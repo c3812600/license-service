@@ -8,8 +8,7 @@ from .crypto import ensure_keypair
 from .db import init_db
 from .device_auth import create_challenge
 from .service import (
-    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats,
-    query_licenses, register_device, renew_license, revoke_device, validate_app_name,
+    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_machine, query_licenses, register_device, renew_license, revoke_device, validate_app_name,
 )
 
 
@@ -268,6 +267,23 @@ def create_app():
             return _ok({"items": rows})
         except ValueError as exc:
             return _error(str(exc), 400)
+
+    @app.post("/api/v1/devices/forget")
+    def admin_forget_device():
+        """删除机器码全部记录（授权+设备凭证+挑战），测试设备可重新申请试用。"""
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        try:
+            result = forget_machine(
+                app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
+            )
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        return _ok(result)
 
     @app.get("/api/v1/stats")
     def stats():

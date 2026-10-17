@@ -438,6 +438,45 @@ def revoke_device(app, *, app_name, machine_code):
         conn.close()
 
 
+def forget_machine(app, *, app_name, machine_code):
+    """删除某机器码的全部记录（授权 + 设备凭证 + 未用挑战），
+    让测试设备以"全新机器"重新申请试用/enrollment。管理端专用。"""
+    validate_app_name(app, app_name)
+    machine_code = check_machine_code(machine_code)
+    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cred = conn.execute(
+            "DELETE FROM device_credentials WHERE app_name=? AND machine_code_hash=?",
+            [app_name, machine_hash],
+        )
+        issues = conn.execute(
+            "DELETE FROM license_issues WHERE app_name=? AND machine_code_hash=?",
+            [app_name, machine_hash],
+        )
+        chall = conn.execute(
+            "DELETE FROM device_challenges WHERE app_name=? AND machine_code_hash=?",
+            [app_name, machine_hash],
+        )
+        write_audit_log(
+            app, action="forget_machine", actor="admin_api", app_name=app_name,
+            machine_code_hash=machine_hash,
+            detail="removed %d licenses" % issues.rowcount, conn=conn,
+        )
+        conn.commit()
+        return {
+            "removed_issues": issues.rowcount,
+            "removed_credential": cred.rowcount > 0,
+            "removed_challenges": chall.rowcount,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def write_audit_log(app, *, action, actor="", app_name="", machine_code_hash="", issue_id="", client_ip="", detail="", conn=None):
     sql = """
         INSERT INTO audit_logs(action, actor, app_name, machine_code_hash, issue_id, client_ip, detail)
