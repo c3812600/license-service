@@ -67,6 +67,32 @@ def init_db(db_path):
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_credentials (
+                app_name TEXT NOT NULL,
+                machine_code_hash TEXT NOT NULL,
+                public_key BLOB NOT NULL,
+                revoked INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (app_name, machine_code_hash)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_challenges (
+                challenge TEXT PRIMARY KEY,
+                app_name TEXT NOT NULL,
+                machine_code_hash TEXT NOT NULL,
+                action TEXT NOT NULL,
+                expires_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_challenges_expiry ON device_challenges(expires_at)"
+        )
         conn.commit()
     finally:
         conn.close()

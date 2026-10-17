@@ -1,4 +1,5 @@
 import datetime as dt
+import re
 import uuid
 
 from .crypto import (
@@ -8,6 +9,7 @@ from .crypto import (
     normalize_machine_code,
     sign_license_payload,
 )
+from .device_auth import check_machine_code, decode_public_key, device_key, verify_proof
 from .db import connect_db, execute, fetch_all
 
 
@@ -120,8 +122,15 @@ def validate_app_name(app, app_name):
         raise ValueError("unsupported app_name")
 
 
-def issue_trial_license(app, *, app_name, machine_code, trial_days=None, app_version="", client_ip="", user_agent=""):
+def issue_trial_license(
+    app, *, app_name, machine_code, device_public_key, challenge, signature,
+    trial_days=None, app_version="", client_ip="", user_agent="",
+):
     validate_app_name(app, app_name)
+    machine_code = check_machine_code(machine_code)
+    if not re.fullmatch(r"[A-F0-9]{64}", machine_code):
+        raise ValueError("self-service trial requires a SHA-256 machine_code")
+    public_key = decode_public_key(device_public_key)
     maximum = app.config["TRIAL_DAYS_MAP"].get(app_name, app.config["TRIAL_DAYS"])
     if maximum < 1:
         raise ValueError("trial days must be positive")
@@ -132,12 +141,33 @@ def issue_trial_license(app, *, app_name, machine_code, trial_days=None, app_ver
     try:
         # Serialize claim lookup and issue insertion across workers and processes.
         conn.execute("BEGIN IMMEDIATE")
+        registered = device_key(conn, app_name, machine_hash)
+        if registered and registered["revoked"]:
+            raise PermissionError("device credential revoked")
+        if registered and registered["public_key"] != public_key:
+            raise PermissionError("device credential mismatch")
+        verify_proof(
+            conn, app_name=app_name, machine_code=machine_code, machine_hash=machine_hash,
+            action="trial", challenge=challenge, signature=signature, public_key=public_key,
+        )
         existing = conn.execute(
             """SELECT issued_at, expires_at FROM license_issues
                WHERE app_name=? AND machine_code_hash=? AND channel='trial_auto'
                ORDER BY id ASC LIMIT 1""",
             (app_name, machine_hash),
         ).fetchone()
+        if not registered:
+            prior = conn.execute(
+                "SELECT 1 FROM license_issues WHERE app_name=? AND machine_code_hash=? LIMIT 1",
+                (app_name, machine_hash),
+            ).fetchone()
+            if prior:
+                raise RuntimeError("device enrollment requires admin approval")
+            conn.execute(
+                """INSERT INTO device_credentials(app_name, machine_code_hash, public_key)
+                   VALUES(?,?,?)""",
+                (app_name, machine_hash, public_key),
+            )
         today = dt.datetime.now(dt.timezone.utc).date()
         if existing:
             first_date = dt.datetime.fromisoformat(existing["issued_at"].replace("Z", "")).date()
@@ -314,6 +344,96 @@ def license_stats(app):
             "expiring_soon": expiring_soon,
             "recent_issues": recent_issues,
         }
+    finally:
+        conn.close()
+
+
+def fetch_latest_license(app, *, app_name, machine_code, challenge, signature):
+    validate_app_name(app, app_name)
+    machine_code = check_machine_code(machine_code)
+    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        registered = device_key(conn, app_name, machine_hash)
+        if not registered or registered["revoked"]:
+            raise PermissionError("device not enrolled or revoked")
+        verify_proof(
+            conn, app_name=app_name, machine_code=machine_code, machine_hash=machine_hash,
+            action="latest", challenge=challenge, signature=signature,
+            public_key=registered["public_key"],
+        )
+        row = conn.execute(
+            """SELECT license_token AS license_key, expires_at, license_type,
+                      channel, issue_id, issued_at FROM license_issues
+               WHERE app_name=? AND machine_code_hash=? AND status='active'
+                 AND expires_at>=? AND channel!='offline_manual'
+               ORDER BY expires_at DESC, id DESC LIMIT 1""",
+            (app_name, machine_hash, dt.datetime.now(dt.timezone.utc).date().isoformat()),
+        ).fetchone()
+        write_audit_log(
+            app, action="fetch_latest", actor="device", app_name=app_name,
+            machine_code_hash=machine_hash, issue_id=row["issue_id"] if row else "",
+            detail="active" if row else "none", conn=conn,
+        )
+        conn.commit()
+        return dict(row) if row else None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def register_device(app, *, app_name, machine_code, device_public_key, challenge, signature):
+    validate_app_name(app, app_name)
+    machine_code = check_machine_code(machine_code)
+    public_key = decode_public_key(device_public_key)
+    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        verify_proof(
+            conn, app_name=app_name, machine_code=machine_code, machine_hash=machine_hash,
+            action="register", challenge=challenge, signature=signature, public_key=public_key,
+        )
+        conn.execute(
+            """INSERT INTO device_credentials(app_name, machine_code_hash, public_key, revoked)
+               VALUES(?,?,?,0)
+               ON CONFLICT(app_name, machine_code_hash)
+               DO UPDATE SET public_key=excluded.public_key, revoked=0, updated_at=CURRENT_TIMESTAMP""",
+            (app_name, machine_hash, public_key),
+        )
+        write_audit_log(
+            app, action="register_device", actor="admin_api", app_name=app_name,
+            machine_code_hash=machine_hash, conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def revoke_device(app, *, app_name, machine_code):
+    validate_app_name(app, app_name)
+    machine_code = check_machine_code(machine_code)
+    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        with conn:
+            updated = conn.execute(
+                """UPDATE device_credentials SET revoked=1, updated_at=CURRENT_TIMESTAMP
+                   WHERE app_name=? AND machine_code_hash=?""",
+                (app_name, machine_hash),
+            ).rowcount
+            if updated:
+                write_audit_log(
+                    app, action="revoke_device", actor="admin_api", app_name=app_name,
+                    machine_code_hash=machine_hash, conn=conn,
+                )
+        return bool(updated)
     finally:
         conn.close()
 

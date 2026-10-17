@@ -367,7 +367,7 @@
 
 - 若实现「设备 Token 静默重拉」，Token 的保护等级必须与授权码相同（DPAPI + 双写），且服务端限制重拉次数与频率。
 - **禁止**「仅凭机器码、不持有任何本地凭据即可无限拉回许可证」——那等价于把授权码公开。
-- 当前现网 `GET /licenses/latest` 是上述禁止情形的**已知过渡缺口**（§8.1），不能据此宣称生产恢复链路已闭环。目标接口须要求已登记的设备凭据（首次试用/激活时颁发，DPAPI 保存；离线签发设备需单独登记）或同等级证明，服务端校验其 `app_name`、机器码、有效期、吊销状态并限流审计；机器码本身不是秘密，不得当作认证凭据。
+- 本仓库已实现设备公钥登记与挑战签名后的 `POST /api/v1/licenses/latest`（§8.1），但在该版本实际部署并更新客户端之前，现网原有 `GET /licenses/latest` 仍是上述禁止情形的**过渡缺口**。客户端私钥以 DPAPI 保护，离线/已有付费设备由管理员核验登记；机器码本身不是秘密，不得当作认证凭据。首次试用的自助登记仍存在“知道机器码的人抢先占用”风险，不能将软件公钥签名冒充硬件身份证明。
 - 文件、注册表与本地状态全部被删除时，DPAPI/HMAC 本身不能证明过去运行过；不得据此重置试用。重装恢复只能走服务端的一机一次记录、有效设备凭据或人工签发。
 
 ### 3. 导入导出注意
@@ -462,7 +462,7 @@
 
 1. 未授权时进入激活页，展示 **机器码**（可一键复制）。
 2. 若 `license_service_url` 已配置，显示主按钮：**「申请试用」/「领取试用」**（产品开放 1 年时文案可为「申请 1 年试用」）。
-3. 点击后调用 `request_trial()`；成功则刷新授权状态，**无需用户粘贴 Token**。
+3. 客户端先生成并用 DPAPI 保护 Ed25519 设备私钥，再按 §8.1 获取 `trial` 挑战并签名，调用 `request_trial()`；成功后刷新授权状态，**无需用户粘贴 Token**。
 4. 失败展示错误并允许重试（客户端冷却 ≥ 60s）。
 
 **B. 申请试用（N 天，含 1 年 / 90 天等）——请求方法**
@@ -479,7 +479,10 @@ User-Agent: {AppName}-License-Client/{version}
   "machine_code": "本机机器码（大写，附录 A）",
   "app_version": "1.2.3",
   "fingerprint_ver": 2,
-  "trial_days": 90
+  "trial_days": 90,
+  "device_public_key": "原始公钥的无填充base64url",
+  "challenge": "服务端trial挑战",
+  "signature": "设备私钥对规范化挑战消息的无填充base64url签名"
 }
 ```
 
@@ -490,6 +493,8 @@ User-Agent: {AppName}-License-Client/{version}
 | `app_version` | 建议 | 客户端版本 |
 | `fingerprint_ver` | 建议 | 当前为 `2`；本仓库服务端暂不核验该字段或弱路径来源 |
 | **`trial_days`** | **建议显式发送** | 如 `30` / `90` / `365`。**1 年 = `365`**。服务端按产品策略钳制上限 |
+| `device_public_key` | 是 | 32 字节原始 Ed25519 公钥的无填充 base64url；首次试用绑定，重复试用必须与已绑定公钥一致 |
+| `challenge` / `signature` | 是 | 先获取 `action=trial` 的一次性挑战；按 §8.1 规范化消息签名，旧无签名请求不再兼容 |
 
 > **通用规则：** 任何试用时长都只改 `trial_days`，客户端代码共用同一套「申请试用」流程。  
 > 例如：开放 90 天 → `trial_days: 90`；开放 1 年 → `trial_days: 365`。
@@ -579,9 +584,9 @@ User-Agent: {AppName}-License-Client/{version}
 
 ### 7.1 过期/到期续签流程（标准）
 
-当前可用的是管理员新签 Token 后**手动交付、客户端本地验签导入**。自动拾取属于目标功能，不能只因为客户端有网就启用：
+当前已部署客户端可用的是管理员新签 Token 后**手动交付、客户端本地验签导入**。本仓库实现了认证领取服务端，但自动拾取必须等**客户端保存设备私钥并完成实际部署与联调**后才能启用：
 
-**路径 A — 在线自动续签（目标；设备凭据接口上线后才可启用）**
+**路径 A — 在线自动拾取续期（本仓库服务端实现；需客户端升级）**
 
 ```text
 管理员侧：
@@ -589,11 +594,12 @@ User-Agent: {AppName}-License-Client/{version}
   → 设新到期（如 +10 年）→ 提交（POST /api/v1/licenses/renew）
   → 服务端签发新 license_key（新到期、新 issue_id），旧记录保留可追溯
 
-客户端侧（目标流程；目前不可直接实现）：
-  ① 首次试用/激活颁发设备凭据，客户端以 DPAPI 保存；
+客户端侧（升级后流程）：
+  ① 首次试用自助登记设备公钥（旧设备由管理员人工登记），客户端以 DPAPI 保存私钥；
      周期复查（默认每 6h，可配）或点击「立即检查续期」
-     → 访问服务端定稿后的认证续期接口，提交设备凭据
-     → 服务端校验产品、设备、凭据有效期和吊销状态
+     → 取得 action=latest 的短时一次性挑战并用设备私钥签名
+     → POST /api/v1/licenses/latest 提交产品、机器码、挑战与签名
+     → 服务端校验产品、设备公钥、挑战和登记/吊销状态，仅返回未过期在线授权
   ② 本地 Ed25519 验签（只使用构建期内置或由旧可信公钥认证的新公钥；
      验不过不得直接下载另一把公钥重试）
   ③ 验签通过且为新授权 → 按第四章 DPAPI 双写存储 → 有效期自动延长
@@ -602,7 +608,7 @@ User-Agent: {AppName}-License-Client/{version}
 ```
 
 要点：
-- 上述为目标 UX，认证设备凭据、可判定业务码和吊销 API 均未在本仓库实现；现网 `latest` 仅凭机器码返回完整 Token，**禁止将它当作生产自动续期/可信吊销确认方案**。
+- 本仓库的设备认证拾取和管理员登记/吊销**仅约束联网取回**；尚无完整许可证吊销同步、设备换绑或客户端实现。已签离线 Token 不会因吊销设备公钥而自动失效。旧现网 `GET latest` 仍不得当作安全恢复接口。
 - 当前 `renew` 只是新签一张授权，旧 Token 仍有效；当前服务端无吊销/降期闭环，不能承诺缩短原有效期。目标版必须先完成旧授权吊销与客户端同步语义。
 - 网络超时、TLS 错误、路由 404 等不得误判为吊销；客户端应保持本地尚未过期的可信 Token。
 
@@ -645,24 +651,46 @@ User-Agent: {AppName}-License-Client/{version}
 | 范围 | 动作与路径 | 鉴权/请求 | 响应与限制 |
 | --- | --- | --- | --- |
 | 本仓库 | `GET /api/v1/health`、`GET /api/v1/public-key` | 无 | 健康信息、公钥 PEM；公钥仅供构建期独立核对 |
-| 本仓库 | `POST /api/v1/trial/apply` | `app_name`、`machine_code`、可选 `app_version`、`trial_days` | `license_key`、`expires_at`、实际 `trial_days`；本仓库忽略可选 `fingerprint_ver`，不代表服务器核验了指纹强度 |
+| 本仓库（尚未部署） | `POST /api/v1/devices/challenge` | `app_name`、`machine_code`、`action=trial/latest/register` | 一次性 `challenge`：trial/latest 120 秒，人工 register 900 秒；公开领取，需代理限流 |
+| 本仓库（尚未部署） | `POST /api/v1/trial/apply` | `app_name`、`machine_code`、`device_public_key`、`challenge`、`signature`；可选 `trial_days` | 首次绑定设备公钥并签发试用；重复领取须原私钥；忽略可选 `fingerprint_ver` |
+| 本仓库（尚未部署） | `POST /api/v1/licenses/latest` | 已登记设备对 `latest` 挑战签名 | 仅未过期、active 的在线 Token；不返回 `offline_manual`；无有效授权 404，不等于吊销 |
+| 本仓库（尚未部署） | `POST /api/v1/devices/register`、`POST /api/v1/devices/revoke` | 管理员 Token；登记时还需新私钥对 `register` 挑战的签名 | 管理员人工登记/轮换/停用设备公钥；停用不撤销已有签名授权 |
 | 本仓库 | `POST /api/v1/licenses/renew`、`POST /api/v1/licenses/offline-issue` | `X-Admin-Token` + `app_name`、`machine_code`、`expires_at` 等 | 新签 Token；不撤销已有 Token；不得从客户端携带管理员 Token |
 | 本仓库 | `GET /api/v1/licenses/query`、`GET /api/v1/stats` | `X-Admin-Token` | 仅管理员查询或统计；`/admin`、`/admin/stats` 为管理页面 |
-| 现网观察（本仓库无实现） | `GET /api/v1/licenses/latest` | 不带参数时返回 400；**只读路由探测** | 文档历史记录称机器码可获取完整 Token；未使用真实机器码取证，不保证响应及安全语义；禁止作为正式恢复接口 |
+| 已部署旧版（待替换） | `GET /api/v1/licenses/latest` | 只读探测无参数返回 400 | 此路由虽已部署，却不能安全认证设备；新版本将移除 GET，旧客户端必须升级 |
 | 现网观察 | `GET /api/v1/stats`、`GET /admin/stats` | 未授权时 stats API 返回 401 | 路由可达；未验证管理员实际数据 |
 | 目标未上线 | `/api/v1/activate`、`/api/v1/validate` | 接口待定稿 | 2026-10-17 公网 GET 返回 404；也没有对应本仓库路由 |
 
 客户端在拿到 `license_key` 后，**必须本地验签通过才落盘**，不得信任服务端仅返回成功。
-`latest` 的机器码可被获知/仿造，不是身份认证；历史接口若返回完整 Token，会泄露授权详情并放大同码克隆风险。未扩展服务端前不得声称“仅凭机器码安全恢复”。任何路由 404、服务降级或超时都不得推断吊销；目标版须有经过认证的 `NO_ACTIVE_LICENSE`/`REVOKED` 等明确业务码。
+`latest` 的机器码可被获知/仿造，不是身份认证；旧 GET 接口不得继续使用。认证新版的 HTTP 404 仅表示此次查询无可领取的 active 在线授权，路由不存在、网络故障、设备凭据停用或离线授权不能据此判定为许可证吊销；完整吊销同步/稳定业务码仍是目标。
+
+**设备签名契约（本仓库实现，需客户端升级；与发行方 Token 的 Ed25519 密钥对完全独立）：**
+
+1. 客户端每个产品/机器生成 Ed25519 设备密钥对，私钥仅留本机并用 DPAPI 保护；首次试用自助登记，已有试用/付费记录未登记者必须管理员人工核验并登记。首次自助登记无法证明真实硬件身份，存在已知机器码被抢先占用的残余风险。
+2. 客户端 `POST /api/v1/devices/challenge` 发送 JSON `{"app_name":"ControlCommand","machine_code":"本机机器码","action":"trial"}`（续期取回用 `latest`，管理员登记用 `register`）。返回 `data.challenge`（43 位无填充 base64url）和 `expires_in`；试用/领取 120 秒，人工登记 900 秒。机器码去空格转大写后限 8-128 位字母/数字/冒号/下划线/连字符，**自助试用还要求 64 位十六进制 SHA-256 码**。
+3. 对以下**无尾部换行**的 UTF-8 字节签名，每行以单个 LF (`\n`) 分隔；`device_public_key` 是 32 字节原始公钥的无填充 base64url（43 位），`signature` 是 64 字节签名的无填充 base64url（86 位）。挑战绑定动作、产品、机器，只能成功使用一次：
+
+```text
+license-service/device/v1
+{action}
+{app_name}
+{normalized_machine_code}
+{challenge}
+```
+
+**跨语言签名对拍向量（固定测试密钥，绝不可用于生产）：** Ed25519 私钥原始 32 字节 seed 为 `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`；`action=latest`、`app_name=ControlCommand`、`machine_code` 为 64 个大写 `A`、`challenge` 为 43 个大写 `A`。按上述规则拼接的签名输入共 156 字节（UTF-8、LF、无尾换行）。无填充 base64url 公钥为 `A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg`，签名为 `HNhvGmg8ez2IrCEP2uypAGDkMHOmGsribExv25ujZSZ5zRIxKdfLucahMQRhufmCdjcWFRJxd1Ljvu2KKUIeAw`。此固定挑战仅用于本地对拍，不能向线上提交。
+
+4. 首次 `trial/apply` 除常规字段外提交 `device_public_key`、`challenge`、`signature`；再次申请使用原公钥和新 `trial` 签名。`POST /api/v1/licenses/latest` 使用新 `latest` 挑战，仅提交 `app_name`、`machine_code`、`challenge`、`signature`；不得在 GET URL 传机器码或管理员 Token。管理员 `devices/register` 接收新密钥的 `register` 挑战/签名和 `X-Admin-Token`，可登记或轮换；`devices/revoke` 接收产品/机器码与管理员 Token，仅停用联网取回能力。丢私钥必须走管理员人工审核，不能凭机器码重领；旧 GET 和无签名试用协议不兼容。
+5. 设备私钥用于**取回授权码**，不能代替客户端对返回 Token 做独立的发行方 Ed25519 验签、机器码、产品和日期核对。可用的硬件保护优先，但不假设所有 Windows 版本都支持不可导出的 Ed25519。服务端不返回已过期、已标记撤销或 `offline_manual` 记录；设备公钥停用**不会**让已落盘签名 Token 自动失效。
 
 **本仓库试用规则**：建议客户端显式发送 `trial_days`（§6.3.1）；产品上限由 `LICENSE_SERVICE_TRIAL_DAYS_MAP`（JSON：`{"<app_name>": 天数}`）指定，未配置用全局 `LICENSE_SERVICE_TRIAL_DAYS`（代码默认 365，仓库示例配置为 30）。未传/非法时取产品上限，有效正整数钳制到上限。新签试用以服务端 **UTC 日期**计算首次到期日；响应 `data.trial_days` 是首次实际发放天数。并发请求在数据库事务中串行处理，重复领取新签 Token 但沿用**首次到期日**，已过期后申请返回 409 `trial expired`。代码及示例配置默认允许 `ControlCommand`、`E-Player`、`WinPilot`、`iCMS`、`rust-node`，生产可通过 `LICENSE_SERVICE_ALLOWED_APPS` 收窄。此规则是代码与测试结论，公网还须用安全测试环境单独联调。
 
-### 2. 目标标准接口（服务端定稿并上线后，客户端才可实现）
+### 2. 尚未实现的目标标准接口
 
 | 动作 | 方法与路径 | 请求 | 响应 `data` | 说明 |
 | --- | --- | --- | --- | --- |
 | 激活 | `POST /api/v1/activate` | `{"key","app_name","machine_code","app_version","fingerprint_ver"}` | `license_token`、`license_id`、`expires_at` | 核销激活码并绑定 |
-| 设备凭据签发/续期拾取 | 目标新增接口，路径由服务端定稿 | 激活/试用后颁发的设备凭据 + `app_name` + `machine_code` | `license_key`、`license_id`、`status` | 设备凭据以 DPAPI 保护并限期、轮换、可吊销；脱机设备需人工登记；请求必须认证，不得只有机器码 |
+| 设备换绑/完整凭据恢复 | 接口待定 | 原设备证明或人工审批与新密钥 | 新设备登记状态 | 当前仅支持管理员登记/轮换公钥，尚无自助换绑或账户级凭据恢复 |
 | 校验/心跳 | `POST /api/v1/validate` | `license_token` 或 `license_id` + `machine_code`；设备凭据/管理凭据认证 | `status`: `active`/`expired`/`revoked`/`grace`，`server_time` | 可静默周期调用；不能把机器码当认证 |
 | 离线申请 | `POST /api/v1/offline-license` | `{"key","app_name","machine_code","fingerprint_ver"}` | `license_token`（同格式） | 供管理台代发 |
 | 解绑 | `POST /api/v1/unbind` | `{"license_id","machine_code"}` + 管理员/经授权的设备凭据 | `ok` | 校验解绑权限、次数、审计；仅 ID/机器码不能解绑 |
@@ -676,7 +704,7 @@ User-Agent: {AppName}-License-Client/{version}
 | validate | 无；客户端以本地验签为准，可调用 `public-key` 做连通性探测 |
 | offline-license | 无；管理台人工签发 |
 
-> 上表为**目标设计，不代表现网已实现**。设备凭据的签发、续期、丢失恢复及与 `license_id`/`issue_id` 的映射须在服务端 API 契约确定后联调；未完成前只可进行受控试点，不得把 `latest` 写成已认证接口。
+> 上表为**目标设计，不代表现网已实现**。设备公钥登记与挑战式取回已在本仓库实现但尚未部署或完成真实 Windows 客户端联调；凭据丢失后只能管理员人工登记。`issue_id` 与目标 `license_id` 尚无稳定映射，不能将联网取回能力误写为完整吊销/换绑能力。
 
 ### 3. 网络容错
 
@@ -802,7 +830,7 @@ ensure_license(silent=False) -> bool   # 启动入口
 - [ ] **Step 2** 实现 Token 解析与 Ed25519 验签（附录 B），内置公钥。
 - [ ] **Step 3** 实现 DPAPI 双写存储与恢复（第四章）。
 - [ ] **Step 4** 实现防回拨状态机（第五章），密钥不写死默认值。
-- [ ] **Step 5** 构建时独立核对并内置发行公钥；当前运行时只对接 `trial/apply` 与手动导入，**不得将现网 `latest` 当正式自动续签**；认证设备凭据、认证续期接口和 validate 列为服务端目标任务。`public-key` 只供查看/核对，不得当运行时换锚接口。
+- [ ] **Step 5** 构建时独立核对并内置发行公钥；新客户端实现设备密钥生成/DPAPI 持久化、挑战签名、认证 `trial/apply` 与 POST `latest`，**在认证版本部署前不得调用现网旧 GET `latest`**；完整 validate/吊销同步仍为目标任务。`public-key` 只供查看/核对，不得当运行时换锚接口。
 - [ ] **Step 6** 定义产品过期策略（第七章）与错误文案（第八章错误码表）。
 - [ ] **Step 7** 按语言接入混淆/打包保护（第三章）。
 - [ ] **Step 8** 跑完整测试矩阵（第十二章），**必含**插拔 U 盘、采集失败回退、克隆机用例。
@@ -1042,14 +1070,14 @@ ensure_license(silent: bool) -> bool
 | 公钥 | release 构建期提供发行方 PEM 并嵌入二进制；安装目录公钥文件不参与正式版信任决策 | 核对指纹、签发私钥匹配；公钥轮换/双公钥尚未实现 |
 | 存储 | 程序在 `%LOCALAPPDATA%\Programs\RustNode`；密码、会话密钥、授权和工作流在 `%LOCALAPPDATA%\RustNode`；授权/防回拨状态使用文件+HKCU | 完成删除单侧副本/损坏副本/多用户/重装测试；现有注册表共用 `updated_at` 且文件使用修改时间，未达到 §4 要求的每条记录独立更新时间和“先校验再择优” |
 | 升级 | 首次运行只复制旧便携版的数据，不删除旧文件；卸载保留用户数据 | 测试旧授权恢复、升级覆盖、卸载重装和数据备份 |
-| 网络续期 | `latest` 当前只凭 `app_name + machine_code` 返回完整 Token；客户端约每 6h 拾取 | 服务端增加认证设备凭据；当前客户端仅凭 HTTP 404 判断无有效授权，尚未实现业务码区分，服务异常时可能误停 |
+| 网络续期 | 已部署版本的旧 GET `latest` 仍只凭机器码；客户端约每 6h 拾取 | 本仓库 POST 版已增加设备签名认证；需服务端上线并升级客户端，HTTP 404 不能作为吊销证据 |
 | 吊销与离线 | 已有本地吊销标记；断网时本地未到期授权继续有效 | 明确服务器吊销最大延迟及离线无法即时吊销的风险 |
 | 弱机器码 | 强路径缓存可回退；弱路径不自动领取试用 | 路径 3 的非 C: 系统卷、路径 4 与 Python `uuid.getnode()` 的选卡一致性尚未验证，需实机对拍或只保留人工审核 |
 | 公钥热更 | 不在正式版中接受未经旧信任锚认证的新公钥 | 目标 §9 的轮换清单和多公钥窗口需单独开发并联调 |
 | Web 门禁 | 未登录请求为 401；来源异常为 403；`block` 模式业务 API 返回 503；授权/认证/健康路径豁免；WebSocket 受登录和授权检查 | 持续连接、跨站请求、到期与续期恢复做真实浏览器验收 |
 | 安装包 | Inno Setup 按用户安装的 x64 测试包；前端 JS 随包可见，二进制不能保证不可逆向 | 实机安装测试、Authenticode 签名、安装器商业使用许可；不得以混淆替代服务端信任边界 |
 
-**产品发布阻断项：** 完整授权恢复接口的设备认证、`latest` 404 与真实吊销的区分、公钥轮换策略（如计划轮换）、第十二章适用的干净机器测试、历史凭据轮换和安装包签名/许可。可以先做受控安装试点，但不得将未完成项写成已上线或“授权完全闭环”。
+**产品发布阻断项：** 设备认证版接口的实际部署与 Windows 客户端对接、`latest` 404 与真实吊销的区分、公钥轮换策略（如计划轮换）、第十二章适用的干净机器测试、历史凭据轮换和安装包签名/许可。可以先做受控安装试点，但不得将未完成项写成已上线或“授权完全闭环”。
 
 ---
 

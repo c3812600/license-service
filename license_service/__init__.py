@@ -6,7 +6,11 @@ from flask import Flask, jsonify, request, send_from_directory
 from .config import Config
 from .crypto import ensure_keypair
 from .db import init_db
-from .service import issue_offline_license, issue_trial_license, license_stats, query_licenses, renew_license
+from .device_auth import create_challenge
+from .service import (
+    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats,
+    query_licenses, register_device, renew_license, revoke_device, validate_app_name,
+)
 
 
 def _error(message, status_code=400):
@@ -72,29 +76,52 @@ def create_app():
         public_key_text = Path(app.config["PUBLIC_KEY_PATH"]).read_text(encoding="utf-8")
         return _ok({"public_key_pem": public_key_text})
 
+    @app.post("/api/v1/devices/challenge")
+    def device_challenge():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        try:
+            validate_app_name(app, data.get("app_name"))
+            return _ok(create_challenge(
+                app, app_name=data["app_name"],
+                machine_code=data.get("machine_code"), action=data.get("action"),
+            ))
+        except ValueError as exc:
+            return _error(str(exc))
+
     @app.post("/api/v1/trial/apply")
     def apply_trial():
-        data = request.get_json(silent=True) or {}
-        app_name = (data.get("app_name") or "").strip()
-        machine_code = (data.get("machine_code") or "").strip()
-        app_version = (data.get("app_version") or "").strip()
-        if not app_name:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        app_name = data.get("app_name")
+        machine_code = data.get("machine_code")
+        app_version = data.get("app_version") or ""
+        if not isinstance(app_name, str) or not app_name.strip():
             return _error("app_name is required")
-        if not machine_code:
+        if not isinstance(machine_code, str) or not machine_code.strip():
             return _error("machine_code is required")
+        if not isinstance(app_version, str):
+            return _error("invalid app_version")
         try:
             issued = issue_trial_license(
                 app,
-                app_name=app_name,
+                app_name=app_name.strip(),
                 machine_code=machine_code,
+                device_public_key=data.get("device_public_key"),
+                challenge=data.get("challenge"),
+                signature=data.get("signature"),
                 trial_days=data.get("trial_days"),
-                app_version=app_version,
+                app_version=app_version.strip(),
                 client_ip=request.remote_addr or "",
                 user_agent=request.headers.get("User-Agent") or "",
             )
             return _ok(issued)
         except ValueError as exc:
             return _error(str(exc), 400)
+        except PermissionError as exc:
+            return _error(str(exc), 403)
         except RuntimeError as exc:
             return _error(str(exc), 409)
 
@@ -166,6 +193,62 @@ def create_app():
             return _ok(issued)
         except ValueError as exc:
             return _error(str(exc), 400)
+
+    @app.post("/api/v1/licenses/latest")
+    def latest_license():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        try:
+            issued = fetch_latest_license(
+                app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
+                challenge=data.get("challenge"), signature=data.get("signature"),
+            )
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        except PermissionError as exc:
+            return _error(str(exc), 403)
+        if not issued:
+            return _error("no active license", 404)
+        return _ok(issued)
+
+    @app.post("/api/v1/devices/register")
+    def admin_register_device():
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        try:
+            register_device(
+                app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
+                device_public_key=data.get("device_public_key"),
+                challenge=data.get("challenge"), signature=data.get("signature"),
+            )
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        except PermissionError as exc:
+            return _error(str(exc), 403)
+        return _ok({"registered": True})
+
+    @app.post("/api/v1/devices/revoke")
+    def admin_revoke_device():
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        try:
+            revoked = revoke_device(
+                app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
+            )
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        if not revoked:
+            return _error("device not enrolled", 404)
+        return _ok({"revoked": True})
 
     @app.get("/api/v1/licenses/query")
     def query():

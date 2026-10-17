@@ -11,10 +11,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from license_service import create_app
 from license_service.config import Config, _allowed_app_names
 from license_service.crypto import TOKEN_PREFIXES, ensure_keypair
+from license_service.device_auth import _signed_message, decode_public_key
 
 
 class LicenseServiceTests(unittest.TestCase):
@@ -38,15 +40,37 @@ class LicenseServiceTests(unittest.TestCase):
         self.config_patch.start()
         self.app = create_app()
         self.client = self.app.test_client()
+        self.device_keys = {}
 
     def tearDown(self):
         self.config_patch.stop()
         self.temp.cleanup()
 
-    def apply_trial(self, machine="A" * 64, days=365):
-        return self.client.post(
+    def device_proof(self, action, machine="A" * 64, app_name="ControlCommand", key=None, client=None):
+        client = client or self.client
+        key = key or self.device_keys.setdefault(machine, Ed25519PrivateKey.generate())
+        result = client.post(
+            "/api/v1/devices/challenge",
+            json={"app_name": app_name, "machine_code": machine, "action": action},
+        )
+        self.assertEqual(result.status_code, 200)
+        challenge = result.json["data"]["challenge"]
+        message = f"license-service/device/v1\n{action}\n{app_name}\n{machine}\n{challenge}".encode()
+        public_key = key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+        return {
+            "app_name": app_name, "machine_code": machine, "challenge": challenge,
+            "signature": base64.urlsafe_b64encode(key.sign(message)).rstrip(b"=").decode(),
+            "device_public_key": base64.urlsafe_b64encode(public_key).rstrip(b"=").decode(),
+        }
+
+    def apply_trial(self, machine="A" * 64, days=365, app_name="ControlCommand", client=None):
+        client = client or self.client
+        proof = self.device_proof("trial", machine, app_name, client=client)
+        return client.post(
             "/api/v1/trial/apply",
-            json={"app_name": "ControlCommand", "machine_code": machine, "trial_days": days},
+            json={**proof, "trial_days": days},
         )
 
     def test_trial_cap_retry_and_signature(self):
@@ -99,10 +123,7 @@ class LicenseServiceTests(unittest.TestCase):
         self.assertEqual(defaults, ("ControlCommand", "E-Player", "WinPilot", "iCMS", "rust-node"))
         for app_name in ("iCMS", "rust-node"):
             with self.subTest(app_name=app_name), patch.object(Config, "ALLOWED_APP_NAMES", defaults):
-                response = create_app().test_client().post(
-                    "/api/v1/trial/apply",
-                    json={"app_name": app_name, "machine_code": "E" * 64},
-                )
+                response = self.apply_trial(machine="E" * 64, app_name=app_name, client=create_app().test_client())
                 self.assertEqual(response.status_code, 200)
                 self.assertTrue(
                     response.json["data"]["license_key"].startswith(TOKEN_PREFIXES[app_name] + ".")
@@ -126,12 +147,11 @@ class LicenseServiceTests(unittest.TestCase):
         self.assertEqual(self.apply_trial(machine="F" * 64).status_code, 200)
 
     def test_concurrent_claims_keep_original_deadline(self):
+        self.device_keys["B" * 64] = Ed25519PrivateKey.generate()
+
         def claim(_):
             with self.app.test_client() as client:
-                return client.post(
-                    "/api/v1/trial/apply",
-                    json={"app_name": "ControlCommand", "machine_code": "B" * 64, "trial_days": 20},
-                )
+                return self.apply_trial(machine="B" * 64, days=20, client=client)
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             responses = list(pool.map(claim, range(6)))
@@ -239,6 +259,204 @@ class LicenseServiceTests(unittest.TestCase):
         self.assertEqual(len(data["recent_issues"]), 20)
         self.assertEqual(len(data["expiring_soon"]), 20)
         self.assertEqual(data["monthly_trend"][0]["count"], 25)
+
+    def test_latest_requires_fresh_device_signature(self):
+        issued = self.apply_trial().json["data"]
+        self.assertEqual(self.client.get("/api/v1/licenses/latest").status_code, 405)
+        unsigned = self.client.post(
+            "/api/v1/licenses/latest", json={"app_name": "ControlCommand", "machine_code": "A" * 64}
+        )
+        self.assertNotEqual(unsigned.status_code, 200)
+        proof = self.device_proof("latest")
+        response = self.client.post("/api/v1/licenses/latest", json=proof)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["data"]["license_key"], issued["license_key"])
+        self.assertEqual(self.client.post("/api/v1/licenses/latest", json=proof).status_code, 403)
+
+    def test_latest_rejects_wrong_device_purpose_and_expired_challenge(self):
+        self.apply_trial()
+        proof = self.device_proof("latest")
+        wrong_key = Ed25519PrivateKey.generate()
+        message = (
+            f"license-service/device/v1\nlatest\nControlCommand\n{'A' * 64}\n{proof['challenge']}"
+        ).encode()
+        wrong_signature = base64.urlsafe_b64encode(wrong_key.sign(message)).rstrip(b"=").decode()
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json={**proof, "signature": wrong_signature}).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json={**proof, "machine_code": "B" * 64}).status_code,
+            403,
+        )
+        trial_proof = self.device_proof("trial")
+        self.assertEqual(self.client.post("/api/v1/licenses/latest", json=trial_proof).status_code, 403)
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE device_challenges SET expires_at=0 WHERE challenge=?", (proof["challenge"],)
+                )
+        self.assertEqual(self.client.post("/api/v1/licenses/latest", json=proof).status_code, 403)
+
+    def test_latest_excludes_expired_revoked_and_offline_issues(self):
+        self.apply_trial()
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute("UPDATE license_issues SET expires_at='2020-01-01'")
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest")).status_code, 404
+        )
+        offline = self.client.post(
+            "/api/v1/licenses/offline-issue", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": "A" * 64, "expires_at": "2040-01-01"},
+        )
+        self.assertEqual(offline.status_code, 200)
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest")).status_code, 404
+        )
+        paid = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": "A" * 64, "expires_at": "2030-01-01"},
+        )
+        self.assertEqual(paid.status_code, 200)
+        picked = self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest"))
+        self.assertEqual(picked.json["data"]["license_key"], paid.json["data"]["license_key"])
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE license_issues SET status='revoked' WHERE issue_id=?",
+                    (paid.json["data"]["issue_id"],),
+                )
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest")).status_code, 404
+        )
+
+    def test_paid_device_requires_admin_enrollment_and_can_rotate_or_revoke(self):
+        machine = "D" * 64
+        paid = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": "2030-01-01"},
+        )
+        self.assertEqual(paid.status_code, 200)
+        self.assertEqual(self.apply_trial(machine=machine).status_code, 409)
+        enrollment = self.device_proof("register", machine=machine)
+        self.assertEqual(self.client.post("/api/v1/devices/register", json=enrollment).status_code, 401)
+        self.assertEqual(self.client.post(
+            "/api/v1/devices/register", json=enrollment, headers={"X-Admin-Token": "test-admin"}
+        ).status_code, 200)
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest", machine=machine)).status_code,
+            200,
+        )
+        new_key = Ed25519PrivateKey.generate()
+        new_enrollment = self.device_proof("register", machine=machine, key=new_key)
+        self.assertEqual(self.client.post(
+            "/api/v1/devices/register", json=new_enrollment, headers={"X-Admin-Token": "test-admin"}
+        ).status_code, 200)
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest", machine=machine)).status_code,
+            403,
+        )
+        self.device_keys[machine] = new_key
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest", machine=machine)).status_code,
+            200,
+        )
+        self.assertEqual(self.client.post(
+            "/api/v1/devices/revoke",
+            json={"app_name": "ControlCommand", "machine_code": machine},
+            headers={"X-Admin-Token": "test-admin"},
+        ).status_code, 200)
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest", machine=machine)).status_code,
+            403,
+        )
+
+    def test_trial_rejects_reenrollment_with_different_key(self):
+        first = self.apply_trial()
+        self.assertEqual(first.status_code, 200)
+        other_key = Ed25519PrivateKey.generate()
+        proof = self.device_proof("trial", key=other_key)
+        self.assertEqual(self.client.post("/api/v1/trial/apply", json=proof).status_code, 403)
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM license_issues").fetchone()[0], 1)
+
+    def test_legacy_trial_requires_admin_enrollment_without_resetting_deadline(self):
+        from license_service.service import _issue_record
+
+        original_deadline = "2030-01-01"
+        _issue_record(
+            self.app, app_name="ControlCommand", machine_code="A" * 64,
+            license_type="trial", expires_at=original_deadline, channel="trial_auto",
+        )
+        self.assertEqual(self.apply_trial().status_code, 409)
+        enrollment = self.device_proof("register")
+        challenge = self.client.post(
+            "/api/v1/devices/challenge",
+            json={"app_name": "ControlCommand", "machine_code": "A" * 64, "action": "register"},
+        )
+        self.assertEqual(challenge.json["data"]["expires_in"], 900)
+        self.assertEqual(self.client.post(
+            "/api/v1/devices/register", json=enrollment, headers={"X-Admin-Token": "test-admin"}
+        ).status_code, 200)
+        self.assertEqual(self.apply_trial().json["data"]["expires_at"], original_deadline)
+
+    def test_trial_requires_strong_machine_code_and_valid_proof(self):
+        weak = self.device_proof("trial", machine="ABCDEF12")
+        self.assertEqual(self.client.post("/api/v1/trial/apply", json=weak).status_code, 400)
+        self.assertEqual(self.client.post(
+            "/api/v1/trial/apply", json={"app_name": [], "machine_code": []}
+        ).status_code, 400)
+        proof = self.device_proof("trial")
+        self.assertEqual(
+            self.client.post("/api/v1/trial/apply", json={**proof, "signature": "invalid"}).status_code,
+            400,
+        )
+        self.assertEqual(self.client.post("/api/v1/trial/apply", json=proof).status_code, 200)
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM device_credentials").fetchone()[0], 1)
+
+    def test_challenge_rejects_non_string_action(self):
+        for action in ([], {}, 12):
+            with self.subTest(action=action):
+                response = self.client.post(
+                    "/api/v1/devices/challenge",
+                    json={"app_name": "ControlCommand", "machine_code": "A" * 64, "action": action},
+                )
+                self.assertEqual(response.status_code, 400)
+
+    def test_competing_device_keys_cannot_both_claim_first_trial(self):
+        proofs = [
+            self.device_proof("trial", machine="C" * 64, key=Ed25519PrivateKey.generate())
+            for _ in range(2)
+        ]
+
+        def claim(proof):
+            with self.app.test_client() as client:
+                return client.post("/api/v1/trial/apply", json=proof).status_code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = list(pool.map(claim, proofs))
+        self.assertEqual(sorted(statuses), [200, 403])
+        with closing(sqlite3.connect(self.db)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM device_credentials").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM license_issues").fetchone()[0], 1)
+
+    def test_device_signature_cross_language_vector(self):
+        seed = bytes(range(32))
+        key = Ed25519PrivateKey.from_private_bytes(seed)
+        public_key = base64.urlsafe_b64encode(key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )).rstrip(b"=").decode()
+        message = _signed_message("latest", "ControlCommand", "A" * 64, "A" * 43)
+        signature = base64.urlsafe_b64encode(key.sign(message)).rstrip(b"=").decode()
+        self.assertEqual(len(message), 156)
+        self.assertEqual(public_key, "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg")
+        self.assertEqual(
+            signature,
+            "HNhvGmg8ez2IrCEP2uypAGDkMHOmGsribExv25ujZSZ5zRIxKdfLucahMQRhufmCdjcWFRJxd1Ljvu2KKUIeAw",
+        )
+        self.assertEqual(len(decode_public_key(public_key)), 32)
 
 
 if __name__ == "__main__":
