@@ -1,8 +1,28 @@
+import json
 import os
 from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_ALLOWED_APPS = "ControlCommand,E-Player,WinPilot,iCMS,rust-node"
+
+
+def _trial_days_map():
+    value = json.loads(os.environ.get("LICENSE_SERVICE_TRIAL_DAYS_MAP") or "{}")
+    if not isinstance(value, dict) or any(
+        not isinstance(name, str) or not isinstance(days, int) or isinstance(days, bool) or days < 1
+        for name, days in value.items()
+    ):
+        raise ValueError("LICENSE_SERVICE_TRIAL_DAYS_MAP must be a JSON object with positive integer days")
+    return value
+
+
+def _allowed_app_names():
+    return tuple(
+        item.strip()
+        for item in (os.environ.get("LICENSE_SERVICE_ALLOWED_APPS") or DEFAULT_ALLOWED_APPS).split(",")
+        if item.strip()
+    )
 
 
 def _resolve_path(raw_value, default_relative_path):
@@ -20,11 +40,8 @@ class Config:
     ADMIN_TOKEN = os.environ.get("LICENSE_SERVICE_ADMIN_TOKEN") or ""
     MACHINE_CODE_SALT = os.environ.get("LICENSE_SERVICE_MACHINE_CODE_SALT") or "change-me"
     TRIAL_DAYS = int(os.environ.get("LICENSE_SERVICE_TRIAL_DAYS") or "365")
-    ALLOWED_APP_NAMES = tuple(
-        item.strip()
-        for item in (os.environ.get("LICENSE_SERVICE_ALLOWED_APPS") or "ControlCommand,E-Player,WinPilot").split(",")
-        if item.strip()
-    )
+    TRIAL_DAYS_MAP = _trial_days_map()
+    ALLOWED_APP_NAMES = _allowed_app_names()
     DATABASE_PATH = _resolve_path(
         os.environ.get("LICENSE_SERVICE_DB_PATH"),
         "data/license-service.db",

@@ -1,10 +1,11 @@
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 
 # App-specific prefixes
@@ -12,6 +13,8 @@ TOKEN_PREFIXES = {
     "ControlCommand": "RCC1",
     "E-Player": "EPL",
     "WinPilot": "WPL",
+    "iCMS": "ICMS",
+    "rust-node": "RUSTNODE",
 }
 
 # Default prefix for backward compatibility
@@ -39,12 +42,27 @@ def normalize_machine_code(machine_code):
     return str(machine_code or "").strip().upper()
 
 
-def ensure_keypair(private_key_path, public_key_path):
+def ensure_keypair(private_key_path, public_key_path, *, allow_generate=True):
     private_path = Path(private_key_path)
     public_path = Path(public_key_path)
 
-    if private_path.exists() and public_path.exists():
+    if private_path.exists() != public_path.exists():
+        raise RuntimeError("incomplete signing keypair; restore the missing key from backup")
+    if private_path.exists():
+        private_key = _load_private_key(private_path)
+        public_key = serialization.load_pem_public_key(public_path.read_bytes())
+        if not isinstance(private_key, Ed25519PrivateKey) or not isinstance(public_key, Ed25519PublicKey):
+            raise RuntimeError("signing keys must be Ed25519")
+        private_public = private_key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+        stored_public = public_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        if private_public != stored_public:
+            raise RuntimeError("signing private and public keys do not match")
         return
+
+    if not allow_generate:
+        raise RuntimeError("signing keypair is missing; restore it from backup")
 
     private_path.parent.mkdir(parents=True, exist_ok=True)
     public_path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,8 +80,13 @@ def ensure_keypair(private_key_path, public_key_path):
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
-    private_path.write_bytes(private_bytes)
-    public_path.write_bytes(public_bytes)
+    # Exclusive creation prevents a second process from silently replacing the trust anchor.
+    with private_path.open("xb") as output:
+        output.write(private_bytes)
+    if os.name != "nt":
+        private_path.chmod(0o600)
+    with public_path.open("xb") as output:
+        output.write(public_bytes)
 
 
 def _load_private_key(private_key_path):

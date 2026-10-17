@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>License Stats</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e4e4e7;
+            --text-dim: #8b8d97;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --warn: #f59e0b;
+            --info: #3b82f6;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .header {
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header h1 { font-size: 18px; font-weight: 600; }
+
+        .header .tag {
+            background: var(--accent);
+            color: #fff;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .header .back-btn {
+            margin-left: auto;
+            background: var(--card);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .header .back-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .token-bar {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin: 24px auto 0;
+            max-width: 800px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .token-bar label {
+            font-size: 13px;
+            color: var(--text-dim);
+            white-space: nowrap;
+        }
+
+        .token-bar input {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: var(--text);
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .token-bar input:focus { border-color: var(--accent); }
+
+        .token-bar .status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--danger);
+            flex-shrink: 0;
+        }
+
+        .token-bar .status.active { background: var(--success); }
+
+        .token-bar .load-btn {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+
+        .token-bar .load-btn:hover { background: var(--accent-hover); }
+
+        .container {
+            max-width: 1200px;
+            margin: 24px auto;
+            padding: 0 24px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px 0;
+            color: var(--text-dim);
+            font-size: 14px;
+        }
+
+        .loading .spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 12px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Overview Cards */
+        .overview {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: 700;
+            line-height: 1;
+            margin-bottom: 8px;
+        }
+
+        .stat-card .label {
+            font-size: 12px;
+            color: var(--text-dim);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-card.accent .value { color: var(--accent); }
+        .stat-card.success .value { color: var(--success); }
+        .stat-card.danger .value { color: var(--danger); }
+        .stat-card.warn .value { color: var(--warn); }
+        .stat-card.info .value { color: var(--info); }
+
+        /* Chart Grid */
+        .charts {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .chart-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+        }
+
+        .chart-card h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--text);
+        }
+
+        .chart-wrap {
+            position: relative;
+            width: 100%;
+            max-height: 280px;
+        }
+
+        .chart-card.wide {
+            grid-column: 1 / -1;
+        }
+
+        /* Table */
+        .table-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 24px;
+            overflow-x: auto;
+        }
+
+        .table-card h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 2px solid var(--border);
+            color: var(--text-dim);
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tr:last-child td { border-bottom: none; }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge.paid { background: rgba(99,102,241,0.15); color: #818cf8; }
+        .badge.trial { background: rgba(245,158,11,0.15); color: #f59e0b; }
+        .badge.active { background: rgba(34,197,94,0.15); color: #22c55e; }
+        .badge.expired { background: rgba(239,68,68,0.15); color: #ef4444; }
+        .badge.warn { background: rgba(245,158,11,0.15); color: #f59e0b; }
+
+        .mono { font-family: 'SF Mono', Monaco, monospace; font-size: 12px; }
+
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-dim);
+        }
+
+        @media (max-width: 768px) {
+            .overview { grid-template-columns: repeat(2, 1fr); }
+            .charts { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>License Stats</h1>
+    <span class="tag">Dashboard</span>
+    <a href="/admin" class="back-btn">← 返回管理</a>
+</div>
+
+<div class="token-bar">
+    <label>Admin Token</label>
+    <input type="password" id="tokenInput" placeholder="输入管理员 Token...">
+    <div class="status" id="tokenStatus"></div>
+    <button class="load-btn" onclick="loadStats()">加载数据</button>
+</div>
+
+<div class="container" id="content">
+    <div class="loading" id="placeholder">
+        输入 Admin Token 后点击「加载数据」
+    </div>
+</div>
+
+<script>
+    const API_BASE = location.origin;
+    const tokenInput = document.getElementById('tokenInput');
+    const tokenStatus = document.getElementById('tokenStatus');
+    const content = document.getElementById('content');
+    let charts = [];
+
+    // Remove credentials saved by older versions; keep the token in memory only.
+    localStorage.removeItem('lic_admin_token');
+
+    tokenInput.addEventListener('input', () => {
+        tokenStatus.classList.toggle('active', tokenInput.value.trim().length > 0);
+    });
+
+    // 触发 input 事件恢复状态
+    tokenInput.dispatchEvent(new Event('input'));
+
+    // Enter 键加载
+    tokenInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadStats(); });
+
+    async function loadStats() {
+        const token = tokenInput.value.trim();
+        if (!token) { alert('请输入 Admin Token'); return; }
+
+        content.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+
+        try {
+            const res = await fetch(`${API_BASE}/api/v1/stats`, {
+                headers: { 'X-Admin-Token': token }
+            });
+            const json = await res.json();
+            if (!json.ok) throw new Error(json.error || '请求失败');
+            renderDashboard(json.data);
+        } catch (err) {
+            content.innerHTML = `<div class="loading" style="color:var(--danger)">加载失败: ${esc(err.message)}</div>`;
+        }
+    }
+
+    const COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899', '#14b8a6', '#a855f7'];
+
+    function renderDashboard(data) {
+        // Destroy old charts
+        charts.forEach(c => c.destroy());
+        charts = [];
+
+        const o = data.overview;
+        let html = '';
+
+        // Overview cards
+        html += `<div class="overview">
+            <div class="stat-card accent"><div class="value">${o.total}</div><div class="label">总授权数</div></div>
+            <div class="stat-card success"><div class="value">${o.active}</div><div class="label">活跃授权</div></div>
+            <div class="stat-card danger"><div class="value">${o.expired}</div><div class="label">已过期</div></div>
+            <div class="stat-card warn"><div class="value">${o.expiring_30d}</div><div class="label">30天内到期</div></div>
+            <div class="stat-card info"><div class="value">${o.unique_machines}</div><div class="label">独立机器</div></div>
+        </div>`;
+
+        // Charts row 1: App + Type + Channel
+        html += `<div class="charts">
+            <div class="chart-card">
+                <h3>应用分布</h3>
+                <div class="chart-wrap"><canvas id="chartApp"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>授权类型</h3>
+                <div class="chart-wrap"><canvas id="chartType"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>签发渠道</h3>
+                <div class="chart-wrap"><canvas id="chartChannel"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>签发者分布</h3>
+                <div class="chart-wrap"><canvas id="chartCreator"></canvas></div>
+            </div>
+        </div>`;
+
+        // Monthly trend (wide)
+        html += `<div class="charts">
+            <div class="chart-card wide">
+                <h3>月度签发趋势</h3>
+                <div class="chart-wrap"><canvas id="chartMonthly"></canvas></div>
+            </div>
+        </div>`;
+
+        // Customer distribution + Expiring soon
+        html += `<div class="charts">
+            <div class="chart-card">
+                <h3>客户分布</h3>
+                <div class="chart-wrap"><canvas id="chartCustomer"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>状态分布</h3>
+                <div class="chart-wrap"><canvas id="chartStatus"></canvas></div>
+            </div>
+        </div>`;
+
+        // Expiring soon table
+        html += `<div class="table-card">
+            <h3>⚠️ 30天内即将到期</h3>
+            ${data.expiring_soon.length ? `<table>
+                <tr><th>应用</th><th>客户</th><th>机器码后4位</th><th>类型</th><th>签发时间</th><th>到期时间</th></tr>
+                ${data.expiring_soon.map(r => `<tr>
+                    <td>${esc(r.app_name)}</td>
+                    <td>${esc(r.customer_name || '-')}</td>
+                    <td class="mono">${esc(r.machine_code_last4)}</td>
+                    <td><span class="badge ${esc(r.license_type)}">${esc(r.license_type)}</span></td>
+                    <td class="mono">${fmtDate(r.issued_at)}</td>
+                    <td class="mono">${esc(r.expires_at)}</td>
+                </tr>`).join('')}
+            </table>` : '<div class="empty">暂无即将到期的授权</div>'}
+        </div>`;
+
+        // Recent issues table
+        html += `<div class="table-card">
+            <h3>📋 最近签发记录</h3>
+            <table>
+                <tr><th>应用</th><th>客户</th><th>机器码</th><th>类型</th><th>渠道</th><th>签发时间</th><th>到期时间</th><th>签发者</th></tr>
+                ${data.recent_issues.map(r => `<tr>
+                    <td>${esc(r.app_name)}</td>
+                    <td>${esc(r.customer_name || '-')}</td>
+                    <td class="mono">${esc(r.machine_code_last4)}</td>
+                    <td><span class="badge ${esc(r.license_type)}">${esc(r.license_type)}</span></td>
+                    <td>${esc(r.channel)}</td>
+                    <td class="mono">${fmtDate(r.issued_at)}</td>
+                    <td class="mono">${esc(r.expires_at)}</td>
+                    <td>${esc(r.created_by)}</td>
+                </tr>`).join('')}
+            </table>
+        </div>`;
+
+        content.innerHTML = html;
+
+        // Render charts
+        const chartOpts = { responsive: true, maintainAspectRatio: true, plugins: { legend: { labels: { color: '#8b8d97', font: { size: 12 } } } } };
+        const doughnutOpts = { ...chartOpts, cutout: '55%', plugins: { ...chartOpts.plugins, legend: { position: 'bottom', labels: { color: '#8b8d97', font: { size: 12 }, padding: 16 } } } };
+
+        // App distribution
+        charts.push(new Chart(document.getElementById('chartApp'), {
+            type: 'doughnut',
+            data: {
+                labels: data.app_distribution.map(d => d.app_name),
+                datasets: [{ data: data.app_distribution.map(d => d.count), backgroundColor: COLORS, borderWidth: 0 }]
+            },
+            options: doughnutOpts
+        }));
+
+        // Type distribution
+        charts.push(new Chart(document.getElementById('chartType'), {
+            type: 'doughnut',
+            data: {
+                labels: data.type_distribution.map(d => d.license_type),
+                datasets: [{ data: data.type_distribution.map(d => d.count), backgroundColor: ['#6366f1', '#f59e0b'], borderWidth: 0 }]
+            },
+            options: doughnutOpts
+        }));
+
+        // Channel distribution
+        charts.push(new Chart(document.getElementById('chartChannel'), {
+            type: 'doughnut',
+            data: {
+                labels: data.channel_distribution.map(d => d.channel),
+                datasets: [{ data: data.channel_distribution.map(d => d.count), backgroundColor: ['#22c55e', '#3b82f6'], borderWidth: 0 }]
+            },
+            options: doughnutOpts
+        }));
+
+        // Creator distribution
+        charts.push(new Chart(document.getElementById('chartCreator'), {
+            type: 'doughnut',
+            data: {
+                labels: data.creator_distribution.map(d => d.created_by),
+                datasets: [{ data: data.creator_distribution.map(d => d.count), backgroundColor: ['#a855f7', '#ec4899'], borderWidth: 0 }]
+            },
+            options: doughnutOpts
+        }));
+
+        // Monthly trend
+        charts.push(new Chart(document.getElementById('chartMonthly'), {
+            type: 'bar',
+            data: {
+                labels: data.monthly_trend.map(d => d.month),
+                datasets: [{
+                    label: '签发数',
+                    data: data.monthly_trend.map(d => d.count),
+                    backgroundColor: 'rgba(99,102,241,0.6)',
+                    borderColor: '#6366f1',
+                    borderWidth: 2,
+                    borderRadius: 6,
+                    barThickness: 60
+                }]
+            },
+            options: {
+                ...chartOpts,
+                plugins: { ...chartOpts.plugins, legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#8b8d97' }, grid: { display: false } },
+                    y: { ticks: { color: '#8b8d97', stepSize: 1 }, grid: { color: '#2a2d3a' }, beginAtZero: true }
+                }
+            }
+        }));
+
+        // Customer distribution
+        if (data.customer_distribution.length) {
+            charts.push(new Chart(document.getElementById('chartCustomer'), {
+                type: 'bar',
+                data: {
+                    labels: data.customer_distribution.map(d => d.customer_name),
+                    datasets: [{
+                        label: '授权数',
+                        data: data.customer_distribution.map(d => d.count),
+                        backgroundColor: COLORS.slice(0, data.customer_distribution.length),
+                        borderRadius: 6,
+                        barThickness: 36
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    ...chartOpts,
+                    plugins: { ...chartOpts.plugins, legend: { display: false } },
+                    scales: {
+                        x: { ticks: { color: '#8b8d97', stepSize: 1 }, grid: { color: '#2a2d3a' }, beginAtZero: true },
+                        y: { ticks: { color: '#8b8d97' }, grid: { display: false } }
+                    }
+                }
+            }));
+        } else {
+            document.getElementById('chartCustomer').parentElement.parentElement.querySelector('h3').textContent += ' (暂无数据)';
+        }
+
+        // Status distribution
+        charts.push(new Chart(document.getElementById('chartStatus'), {
+            type: 'doughnut',
+            data: {
+                labels: data.status_distribution.map(d => d.status),
+                datasets: [{ data: data.status_distribution.map(d => d.count), backgroundColor: ['#22c55e', '#ef4444', '#f59e0b'], borderWidth: 0 }]
+            },
+            options: doughnutOpts
+        }));
+    }
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function fmtDate(s) { return s ? s.replace('T', ' ').replace('Z', '').slice(0, 16) : '-'; }
+</script>
+</body>
+</html>

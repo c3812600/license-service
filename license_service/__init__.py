@@ -1,3 +1,4 @@
+import hmac
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -5,7 +6,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from .config import Config
 from .crypto import ensure_keypair
 from .db import init_db
-from .service import issue_offline_license, issue_trial_license, query_licenses, renew_license
+from .service import issue_offline_license, issue_trial_license, license_stats, query_licenses, renew_license
 
 
 def _error(message, status_code=400):
@@ -21,7 +22,7 @@ def _require_admin_token(app):
     incoming = (request.headers.get("X-Admin-Token") or "").strip()
     if not configured:
         return _error("admin token is not configured", 500)
-    if incoming != configured:
+    if not hmac.compare_digest(incoming, configured):
         return _error("unauthorized", 401)
     return None
 
@@ -36,12 +37,25 @@ def create_app():
     def admin_page():
         return send_from_directory(static_dir, "admin.html")
 
+    @app.get("/admin/stats")
+    def stats_page():
+        return send_from_directory(static_dir, "stats.html")
+
     @app.get("/admin/<path:filename>")
     def admin_static(filename):
         return send_from_directory(static_dir, filename)
 
-    ensure_keypair(app.config["PRIVATE_KEY_PATH"], app.config["PUBLIC_KEY_PATH"])
+    ensure_keypair(
+        app.config["PRIVATE_KEY_PATH"], app.config["PUBLIC_KEY_PATH"],
+        allow_generate=not Path(app.config["DATABASE_PATH"]).exists(),
+    )
     init_db(app.config["DATABASE_PATH"])
+
+    @app.after_request
+    def prevent_sensitive_caching(response):
+        if request.path.startswith("/api/v1/") or request.path.startswith("/admin"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/api/v1/health")
     def health():
@@ -73,6 +87,7 @@ def create_app():
                 app,
                 app_name=app_name,
                 machine_code=machine_code,
+                trial_days=data.get("trial_days"),
                 app_version=app_version,
                 client_ip=request.remote_addr or "",
                 user_agent=request.headers.get("User-Agent") or "",
@@ -170,5 +185,12 @@ def create_app():
             return _ok({"items": rows})
         except ValueError as exc:
             return _error(str(exc), 400)
+
+    @app.get("/api/v1/stats")
+    def stats():
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        return _ok(license_stats(app))
 
     return app

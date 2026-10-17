@@ -2,12 +2,13 @@ import datetime as dt
 import uuid
 
 from .crypto import (
+    TOKEN_PREFIXES,
     hash_license_token,
     hash_machine_code,
     normalize_machine_code,
     sign_license_payload,
 )
-from .db import execute, fetch_all, fetch_one
+from .db import connect_db, execute, fetch_all
 
 
 def _utc_now():
@@ -33,6 +34,7 @@ def _issue_record(
     client_ip="",
     user_agent="",
     app_version="",
+    conn=None,
 ):
     config = app.config
     normalized_machine_code = normalize_machine_code(machine_code)
@@ -53,9 +55,7 @@ def _issue_record(
     license_token = sign_license_payload(payload, config["PRIVATE_KEY_PATH"], app_name=app_name)
     license_token_hash = hash_license_token(license_token)
 
-    execute(
-        config["DATABASE_PATH"],
-        """
+    insert_sql = """
         INSERT INTO license_issues(
             issue_id, app_name, machine_code_hash, machine_code_last4, license_type,
             channel, status, issued_at, expires_at, customer_name, notes,
@@ -63,28 +63,31 @@ def _issue_record(
             license_token, license_token_hash, updated_at
         )
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
-        """,
-        [
-            issue_id,
-            app_name,
-            machine_code_hash,
-            normalized_machine_code[-4:],
-            license_type,
-            channel,
-            "active",
-            issued_at,
-            expires_at,
-            customer_name,
-            notes,
-            previous_issue_id,
-            created_by,
-            client_ip,
-            user_agent,
-            app_version,
-            license_token,
-            license_token_hash,
-        ],
-    )
+        """
+    insert_args = [
+        issue_id,
+        app_name,
+        machine_code_hash,
+        normalized_machine_code[-4:],
+        license_type,
+        channel,
+        "active",
+        issued_at,
+        expires_at,
+        customer_name,
+        notes,
+        previous_issue_id,
+        created_by,
+        client_ip,
+        user_agent,
+        app_version,
+        license_token,
+        license_token_hash,
+    ]
+    if conn is None:
+        execute(config["DATABASE_PATH"], insert_sql, insert_args)
+    else:
+        conn.execute(insert_sql, insert_args)
     write_audit_log(
         app,
         action="issue_license",
@@ -98,6 +101,7 @@ def _issue_record(
             license_type=license_type,
             expires_at=expires_at,
         ),
+        conn=conn,
     )
     return {
         "issue_id": issue_id,
@@ -112,66 +116,52 @@ def _issue_record(
 
 
 def validate_app_name(app, app_name):
-    if app_name not in app.config["ALLOWED_APP_NAMES"]:
+    if app_name not in app.config["ALLOWED_APP_NAMES"] or app_name not in TOKEN_PREFIXES:
         raise ValueError("unsupported app_name")
 
 
-def ensure_trial_available(app, app_name, machine_code):
-    """检查试用是否可用。
-
-    返回值：
-      - None: 首次领取，无历史记录
-      - dict: 已有首次试用记录，包含 issued_at 和 expires_at
-    """
+def issue_trial_license(app, *, app_name, machine_code, trial_days=None, app_version="", client_ip="", user_agent=""):
     validate_app_name(app, app_name)
-    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
-    existing = fetch_one(
-        app.config["DATABASE_PATH"],
-        """
-        SELECT issued_at, expires_at FROM license_issues
-        WHERE app_name=? AND machine_code_hash=? AND channel='trial_auto'
-        ORDER BY id ASC
-        LIMIT 1
-        """,
-        [app_name, machine_code_hash],
-    )
-    if existing:
-        # 已有首次试用记录，检查是否已过期
-        first_issued_at = existing["issued_at"].replace("Z", "")
-        first_issued_date = dt.datetime.fromisoformat(first_issued_at).date()
-        first_expires_date = _parse_date(existing["expires_at"])
-        today = dt.date.today()
-        if today > first_expires_date:
-            # 已过期，不允许再领取
-            raise RuntimeError("trial expired")
-        # 未过期（重装场景），返回首次领取信息用于计算剩余时间
-        return {"issued_at": first_issued_date, "expires_at": first_expires_date}
-    return None
-
-
-def issue_trial_license(app, *, app_name, machine_code, app_version="", client_ip="", user_agent=""):
-    existing_trial = ensure_trial_available(app, app_name, machine_code)
-    if existing_trial:
-        # 已有首次试用记录（未过期），使用首次领取时间 + TRIAL_DAYS 作为到期时间
-        expires_at = (existing_trial["issued_at"] + dt.timedelta(days=app.config["TRIAL_DAYS"])).isoformat()
-    else:
-        # 首次领取或已过期后重新领取，从今天起计算
-        expires_at = (dt.date.today() + dt.timedelta(days=app.config["TRIAL_DAYS"])).isoformat()
-    return _issue_record(
-        app,
-        app_name=app_name,
-        machine_code=machine_code,
-        license_type="trial",
-        expires_at=expires_at,
-        channel="trial_auto",
-        customer_name="",
-        notes="1-year auto trial",
-        previous_issue_id="",
-        created_by="public_api",
-        client_ip=client_ip,
-        user_agent=user_agent,
-        app_version=app_version,
-    )
+    maximum = app.config["TRIAL_DAYS_MAP"].get(app_name, app.config["TRIAL_DAYS"])
+    if maximum < 1:
+        raise ValueError("trial days must be positive")
+    requested = trial_days if type(trial_days) is int and trial_days > 0 else maximum
+    days = min(requested, maximum)
+    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        # Serialize claim lookup and issue insertion across workers and processes.
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            """SELECT issued_at, expires_at FROM license_issues
+               WHERE app_name=? AND machine_code_hash=? AND channel='trial_auto'
+               ORDER BY id ASC LIMIT 1""",
+            (app_name, machine_hash),
+        ).fetchone()
+        today = dt.datetime.now(dt.timezone.utc).date()
+        if existing:
+            first_date = dt.datetime.fromisoformat(existing["issued_at"].replace("Z", "")).date()
+            expires_date = _parse_date(existing["expires_at"])
+            if today > expires_date:
+                raise RuntimeError("trial expired")
+            # A retry inherits the original deadline even if policy was changed later.
+            days = (expires_date - first_date).days
+        else:
+            expires_date = today + dt.timedelta(days=days)
+        issued = _issue_record(
+            app, app_name=app_name, machine_code=machine_code, license_type="trial",
+            expires_at=expires_date.isoformat(), channel="trial_auto",
+            notes="auto trial", created_by="public_api", client_ip=client_ip,
+            user_agent=user_agent, app_version=app_version, conn=conn,
+        )
+        conn.commit()
+        issued["trial_days"] = days
+        return issued
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def renew_license(
@@ -254,12 +244,87 @@ def query_licenses(app, *, app_name, machine_code):
     return [dict(row) for row in rows]
 
 
-def write_audit_log(app, *, action, actor="", app_name="", machine_code_hash="", issue_id="", client_ip="", detail=""):
-    execute(
-        app.config["DATABASE_PATH"],
-        """
+def license_stats(app):
+    current_date = dt.date.today()
+    today = current_date.isoformat()
+    cutoff = (current_date + dt.timedelta(days=30)).isoformat()
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        conn.execute("BEGIN")
+        overview = dict(conn.execute(
+            """SELECT COUNT(*) AS total,
+                      COALESCE(SUM(CASE WHEN status='active' AND expires_at>=? THEN 1 ELSE 0 END), 0) AS active,
+                      COALESCE(SUM(CASE WHEN expires_at<? THEN 1 ELSE 0 END), 0) AS expired,
+                      COALESCE(SUM(CASE WHEN status='active' AND expires_at BETWEEN ? AND ? THEN 1 ELSE 0 END), 0) AS expiring_30d,
+                      COUNT(DISTINCT machine_code_hash) AS unique_machines
+               FROM license_issues""",
+            (today, today, today, cutoff),
+        ).fetchone())
+
+        def grouped(field, expression, where="", args=(), limit=""):
+            rows = conn.execute(
+                f"""SELECT {expression} AS {field}, COUNT(*) AS count
+                    FROM license_issues {where}
+                    GROUP BY {expression}
+                    ORDER BY count DESC, {field} ASC {limit}""",
+                args,
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+        detail_fields = (
+            "app_name, customer_name, machine_code_last4, license_type, issued_at, expires_at"
+        )
+        expiring_soon = [
+            dict(row) for row in conn.execute(
+                f"""SELECT {detail_fields} FROM license_issues
+                    WHERE status='active' AND expires_at BETWEEN ? AND ?
+                    ORDER BY expires_at ASC, id ASC LIMIT 20""",
+                (today, cutoff),
+            ).fetchall()
+        ]
+        recent_issues = [
+            dict(row) for row in conn.execute(
+                f"""SELECT {detail_fields}, channel, created_by FROM license_issues
+                    ORDER BY id DESC LIMIT 20"""
+            ).fetchall()
+        ]
+        monthly_trend = [
+            dict(row) for row in conn.execute(
+                """SELECT month, COUNT(*) AS count
+                   FROM (SELECT strftime('%Y-%m', issued_at) AS month FROM license_issues)
+                   WHERE month IS NOT NULL
+                   GROUP BY month ORDER BY month ASC"""
+            ).fetchall()
+        ]
+        return {
+            "overview": overview,
+            "app_distribution": grouped("app_name", "app_name"),
+            "type_distribution": grouped("license_type", "license_type"),
+            "channel_distribution": grouped("channel", "channel"),
+            "creator_distribution": grouped("created_by", "created_by"),
+            "customer_distribution": grouped(
+                "customer_name", "customer_name",
+                "WHERE customer_name IS NOT NULL AND customer_name!=''", limit="LIMIT 8",
+            ),
+            "status_distribution": grouped(
+                "status", "CASE WHEN status='active' AND expires_at<:today THEN 'expired' ELSE status END",
+                args={"today": today},
+            ),
+            "monthly_trend": monthly_trend,
+            "expiring_soon": expiring_soon,
+            "recent_issues": recent_issues,
+        }
+    finally:
+        conn.close()
+
+
+def write_audit_log(app, *, action, actor="", app_name="", machine_code_hash="", issue_id="", client_ip="", detail="", conn=None):
+    sql = """
         INSERT INTO audit_logs(action, actor, app_name, machine_code_hash, issue_id, client_ip, detail)
         VALUES(?,?,?,?,?,?,?)
-        """,
-        [action, actor, app_name, machine_code_hash, issue_id, client_ip, detail],
-    )
+        """
+    args = [action, actor, app_name, machine_code_hash, issue_id, client_ip, detail]
+    if conn is None:
+        execute(app.config["DATABASE_PATH"], sql, args)
+    else:
+        conn.execute(sql, args)
