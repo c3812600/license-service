@@ -396,6 +396,9 @@
                 <label>备注（可选）</label>
                 <input type="text" id="r-notes" placeholder="备注信息">
             </div>
+            <label style="display:flex;align-items:center;gap:6px;margin:8px 0;font-size:13px;color:#9aa4b2">
+                <input type="checkbox" id="r-supersede"> 签发前吊销该设备全部旧授权（缩短有效期时必勾，否则客户端仍取最长记录）
+            </label>
             <button class="btn btn-primary" onclick="doRenew()">续期签发</button>
             <div class="result" id="r-result"></div>
         </div>
@@ -601,7 +604,8 @@
                 expires_at: expires,
                 license_type: document.getElementById('r-type').value,
                 customer_name: document.getElementById('r-customer').value.trim(),
-                notes: document.getElementById('r-notes').value.trim()
+                notes: document.getElementById('r-notes').value.trim(),
+                supersede: document.getElementById('r-supersede').checked
             })
         });
         showResult('r-result', res.ok, res.ok ? res.data : res);

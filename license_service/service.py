@@ -207,9 +207,33 @@ def renew_license(
     created_by="admin_api",
     client_ip="",
     user_agent="",
+    supersede=False,
 ):
     validate_app_name(app, app_name)
     _parse_date(expires_at)
+    if supersede:
+        # 客户端取"最长有效期"的 active 授权——缩短有效期必须先吊销旧记录，否则新记录永不生效
+        machine_code = check_machine_code(machine_code)
+        machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+        conn = connect_db(app.config["DATABASE_PATH"])
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                "UPDATE license_issues SET status='revoked' WHERE app_name=? AND machine_code_hash=? AND status='active'",
+                [app_name, machine_hash],
+            )
+            write_audit_log(
+                app, action="supersede_revoke", actor=created_by, app_name=app_name,
+                machine_code_hash=machine_hash,
+                detail="revoked %d active license(s) before renew to %s" % (cur.rowcount, expires_at),
+                conn=conn,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
     return _issue_record(
         app,
         app_name=app_name,

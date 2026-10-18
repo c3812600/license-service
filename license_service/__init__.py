@@ -151,6 +151,7 @@ def create_app():
                 customer_name=(data.get("customer_name") or "").strip(),
                 notes=(data.get("notes") or "").strip(),
                 previous_issue_id=(data.get("previous_issue_id") or "").strip(),
+                supersede=bool(data.get("supersede")),
                 created_by="admin_api",
                 client_ip=request.remote_addr or "",
                 user_agent=request.headers.get("User-Agent") or "",
