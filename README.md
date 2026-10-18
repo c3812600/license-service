@@ -38,12 +38,12 @@ license-service/device/v1
 3. 首次试用向 `POST /api/v1/trial/apply` 提交：
 
 ```json
-{"app_name":"ControlCommand","machine_code":"本机机器码","app_version":"1.2.3","trial_days":365,"device_public_key":"43位无填充base64url","challenge":"服务端挑战","signature":"86位无填充base64url"}
+{"app_name":"ControlCommand","machine_code":"本机机器码","app_version":"1.2.3","trial_days":30,"device_public_key":"43位无填充base64url","challenge":"服务端挑战","signature":"86位无填充base64url"}
 ```
 
 恢复试用须重新领取 `trial` 挑战并用**原私钥**签名；没有公钥登记的旧试用/付费记录不得自助认领，由管理员核实后走 `register`。领取续期先取 `latest` 挑战，再向 `POST /api/v1/licenses/latest` 提交 `app_name`、`machine_code`、`challenge`、`signature`（不提交公钥）。挑战仅能使用一次，不能跨用途、产品或机器；设备凭据被吊销或证明失败返回 403；没有未过期在线授权返回 404，**不是吊销证据**。离线手工签发的 Token 不由 `latest` 返回。管理员登记/轮换时，客户端先获取 `register` 挑战并对相同格式内容签名，管理员通过受控渠道取得公钥、机器码、挑战和签名，连同管理员 Token 调用 `/api/v1/devices/register`；丢失私钥需要人工核验并重新登记。管理员可通过 `/api/v1/devices/revoke` 提交 `app_name` 和 `machine_code` 停用旧设备凭据。
 
-`LICENSE_SERVICE_TRIAL_DAYS` 是全局上限（代码默认 365；示例配置为 30），`LICENSE_SERVICE_TRIAL_DAYS_MAP` 可设置产品上限。有效正整数 `trial_days` 被钳制到上限；缺失/非法时取上限。新签试用按服务端 UTC 日期计算首次到期日；响应 `data.trial_days` 是首次实际发放天数。已登记设备重复领取会新签一个 Token，但沿用首次到期日；过期后返回 HTTP 409 `trial expired`。请通过代理对公开挑战/试用/领取接口配置 IP 限流、请求体大小限制与监控。设备公钥签名用于**取回授权**，不能代替客户端下载后的 Ed25519 许可证验签。
+`LICENSE_SERVICE_TRIAL_DAYS` 是全局上限（代码与示例配置默认 30），`LICENSE_SERVICE_TRIAL_DAYS_MAP` 可设置产品上限。有效正整数 `trial_days` 被钳制到上限；缺失/非法时取上限。新签试用按服务端 UTC 日期计算首次到期日；响应 `data.trial_days` 是首次实际发放天数。已登记设备重复领取会新签一个 Token，但沿用首次到期日；过期后返回 HTTP 409 `trial expired`。请通过代理对公开挑战/试用/领取接口配置 IP 限流、请求体大小限制与监控。设备公钥签名用于**取回授权**，不能代替客户端下载后的 Ed25519 许可证验签。
 
 Token 格式为 `<产品前缀>.<base64url(payload)>.<base64url(Ed25519签名)>`；签名覆盖原始 payload JSON 字节。内置前缀：`ControlCommand=RCC1`、`E-Player=EPL`、`WinPilot=WPL`、`iCMS=ICMS`、`rust-node=RUSTNODE`。代码及示例配置默认允许这五个产品，生产部署应按实际开通范围收窄 `LICENSE_SERVICE_ALLOWED_APPS`；客户端需内置经独立渠道核对的生产公钥并校验前缀、签名、产品、机器码、日期。
 
