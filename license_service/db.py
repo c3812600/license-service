@@ -69,6 +69,20 @@ def init_db(db_path):
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS device_registry (
+                app_name TEXT NOT NULL,
+                machine_code_hash TEXT NOT NULL,
+                machine_code TEXT NOT NULL,
+                customer_name TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                first_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (app_name, machine_code_hash)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS device_credentials (
                 app_name TEXT NOT NULL,
                 machine_code_hash TEXT NOT NULL,

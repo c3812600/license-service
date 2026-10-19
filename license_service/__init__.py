@@ -8,7 +8,7 @@ from .crypto import ensure_keypair
 from .db import init_db
 from .device_auth import create_challenge
 from .service import (
-    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_machine, query_licenses, register_device, renew_license, revoke_device, validate_app_name,
+    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_machine, query_licenses, register_device, renew_license, revoke_device, validate_app_name, list_devices, update_device_meta, touch_device,
 )
 
 
@@ -285,6 +285,34 @@ def create_app():
         except ValueError as exc:
             return _error(str(exc), 400)
         return _ok(result)
+
+    @app.get("/api/v1/devices")
+    def admin_list_devices():
+        """设备列表（模糊搜索机器码/客户/备注）+ 首页统计摘要"""
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        q = (request.args.get("q") or "").strip()
+        app_name = (request.args.get("app_name") or "").strip()
+        return _ok(list_devices(app, q=q, app_name=app_name))
+
+    @app.patch("/api/v1/devices")
+    def admin_update_device():
+        """编辑设备档案（客户名/备注）"""
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        data = request.get_json(silent=True) or {}
+        try:
+            return _ok(update_device_meta(
+                app,
+                app_name=(data.get("app_name") or "").strip(),
+                machine_code=(data.get("machine_code") or "").strip(),
+                customer_name=data.get("customer_name"),
+                notes=data.get("notes"),
+            ))
+        except ValueError as exc:
+            return _error(str(exc), 400)
 
     @app.get("/api/v1/stats")
     def stats():

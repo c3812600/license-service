@@ -6,339 +6,157 @@
     <title>License Admin</title>
     <style>
         :root {
-            --bg: #0f1117;
-            --card: #1a1d27;
-            --border: #2a2d3a;
-            --text: #e4e4e7;
-            --text-dim: #8b8d97;
-            --accent: #6366f1;
-            --accent-hover: #818cf8;
-            --success: #22c55e;
-            --danger: #ef4444;
-            --warn: #f59e0b;
+            --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
+            --text: #e4e4e7; --text-dim: #8b8d97;
+            --accent: #6366f1; --accent-hover: #818cf8;
+            --success: #22c55e; --danger: #ef4444; --warn: #f59e0b;
         }
-
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        .token-bar { display: flex; align-items: center; gap: 10px; padding: 10px 24px; background: #12141c; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
+        .token-bar label { color: var(--text-dim); white-space: nowrap; }
+        .token-bar input { flex: 0 1 340px; padding: 7px 11px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; outline: none; }
+        .token-bar input:focus { border-color: var(--accent); }
+        .token-bar .status { color: var(--text-dim); }
+        .token-bar .status.active { color: var(--success); }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-        }
+        .container { max-width: 1180px; margin: 0 auto; padding: 20px 24px 60px; }
 
-        .header {
-            border-bottom: 1px solid var(--border);
-            padding: 16px 24px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+        .stat { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+        .stat .num { font-size: 24px; font-weight: 700; }
+        .stat .lbl { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+        .stat.s-active .num { color: var(--success); }
+        .stat.s-soon .num { color: var(--warn); }
+        .stat.s-expired .num { color: var(--danger); }
 
-        .header h1 {
-            font-size: 18px;
-            font-weight: 600;
-        }
+        .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+        .toolbar input[type=text] { flex: 1 1 260px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 13px; outline: none; }
+        .toolbar select { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 13px; }
 
-        .header .tag {
-            background: var(--accent);
-            color: #fff;
-            font-size: 11px;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-weight: 500;
-        }
+        .btn { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 13px; cursor: pointer; transition: all .15s; }
+        .btn:hover { border-color: var(--accent); }
+        .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-danger { background: transparent; border-color: #7f1d1d; color: var(--danger); }
+        .btn-danger:hover { background: #7f1d1d33; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
 
-        .container {
-            max-width: 800px;
-            margin: 32px auto;
-            padding: 0 24px;
-        }
+        .table-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        th { color: var(--text-dim); font-weight: 500; font-size: 12px; background: #161923; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: #1e2130; }
+        .mc { font-family: ui-monospace, Consolas, monospace; font-size: 12px; letter-spacing: 0.5px; cursor: pointer; }
+        .mc:hover { color: var(--accent-hover); }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; }
+        .badge.active { background: #22c55e22; color: var(--success); }
+        .badge.soon { background: #f59e0b22; color: var(--warn); }
+        .badge.expired { background: #ef444422; color: var(--danger); }
+        .badge.none { background: #8b8d9722; color: var(--text-dim); }
+        .dim { color: var(--text-dim); }
+        .summary-line { margin-top: 10px; font-size: 12px; color: var(--text-dim); }
 
-        .token-bar {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 16px 20px;
-            margin-bottom: 24px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+        .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; align-items: center; justify-content: center; z-index: 50; }
+        .modal-mask.show { display: flex; }
+        .modal { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 22px; width: 440px; max-width: 92vw; max-height: 88vh; overflow-y: auto; }
+        .modal h3 { font-size: 15px; margin-bottom: 14px; }
+        .modal .field { margin-bottom: 12px; }
+        .modal label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+        .modal input[type=text], .modal input[type=date], .modal select, .modal textarea { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; outline: none; }
+        .modal input[readonly] { color: var(--text-dim); font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+        .modal textarea { resize: none; font-family: ui-monospace, Consolas, monospace; font-size: 11px; word-break: break-all; }
+        .modal .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .modal .check { display: flex; align-items: flex-start; gap: 6px; font-size: 12.5px; color: var(--text-dim); margin-bottom: 12px; line-height: 1.5; }
+        .modal .check input { margin-top: 3px; }
+        .modal .foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+        .msg { font-size: 12.5px; margin-top: 10px; min-height: 16px; word-break: break-all; }
+        .msg.ok { color: var(--success); }
+        .msg.err { color: var(--danger); }
 
-        .token-bar label {
-            font-size: 13px;
-            color: var(--text-dim);
-            white-space: nowrap;
-        }
-
-        .token-bar input {
-            flex: 1;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 8px 12px;
-            color: var(--text);
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 13px;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        .token-bar input:focus {
-            border-color: var(--accent);
-        }
-
-        .token-bar .status {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--danger);
-            flex-shrink: 0;
-        }
-
-        .token-bar .status.active {
-            background: var(--success);
-        }
-
-        .tabs {
-            display: flex;
-            gap: 4px;
-            margin-bottom: 24px;
-            background: var(--card);
-            border-radius: 10px;
-            padding: 4px;
-            border: 1px solid var(--border);
-        }
-
-        .tab {
-            flex: 1;
-            padding: 10px;
-            text-align: center;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            color: var(--text-dim);
-            transition: all 0.2s;
-            border: none;
-            background: none;
-        }
-
-        .tab:hover {
-            color: var(--text);
-        }
-
-        .tab.active {
-            background: var(--accent);
-            color: #fff;
-        }
-
-        .panel {
-            display: none;
-        }
-
-        .panel.active {
-            display: block;
-        }
-
-        .card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 24px;
-        }
-
-        .field {
-            margin-bottom: 16px;
-        }
-
-        .field label {
-            display: block;
-            font-size: 13px;
-            color: var(--text-dim);
-            margin-bottom: 6px;
-            font-weight: 500;
-        }
-
-        .field input, .field select {
-            width: 100%;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 10px 12px;
-            color: var(--text);
-            font-size: 14px;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        .field input:focus, .field select:focus {
-            border-color: var(--accent);
-        }
-
-        .field select {
-            cursor: pointer;
-        }
-
-        .row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-        }
-
-        .btn {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            margin-top: 8px;
-        }
-
-        .btn-primary {
-            background: var(--accent);
-            color: #fff;
-        }
-
-        .btn-primary:hover {
-            background: var(--accent-hover);
-        }
-
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .result {
-            margin-top: 20px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 16px;
-            display: none;
-        }
-
-        .result.show {
-            display: block;
-        }
-
-        .result-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-
-        .result-header .label {
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .result-header .label.ok { color: var(--success); }
-        .result-header .label.err { color: var(--danger); }
-
-        .result pre {
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 12px;
-            line-height: 1.6;
-            color: var(--text-dim);
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-
-        .license-key {
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 12px;
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 12px;
-            margin-top: 12px;
-            word-break: break-all;
-            line-height: 1.6;
-            position: relative;
-        }
-
-        .copy-btn {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            border-radius: 4px;
-            padding: 4px 10px;
-            font-size: 11px;
-            cursor: pointer;
-            font-weight: 500;
-        }
-
-        .copy-btn:hover {
-            background: var(--accent-hover);
-        }
-
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid var(--border);
-            font-size: 13px;
-        }
-
-        .info-row:last-child { border-bottom: none; }
-        .info-row .k { color: var(--text-dim); }
-        .info-row .v { font-weight: 500; font-family: 'SF Mono', Monaco, monospace; }
-
-        .empty {
-            text-align: center;
-            padding: 40px;
-            color: var(--text-dim);
-            font-size: 14px;
-        }
-
-        @media (max-width: 600px) {
-            .row { grid-template-columns: 1fr; }
-            .token-bar { flex-wrap: wrap; }
-        }
+        @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }
     </style>
 </head>
 <body>
-
-<div class="header">
-    <h1>License Admin</h1>
-    <span class="tag">v1.0</span>
-    <a href="/admin/stats" style="margin-left:auto;background:var(--accent);color:#fff;text-decoration:none;padding:6px 16px;border-radius:6px;font-size:13px;font-weight:600;transition:background 0.2s;">📊 统计</a>
-</div>
-
-<div class="container">
-    <!-- Token Bar -->
     <div class="token-bar">
-        <label>Admin Token</label>
-        <input type="password" id="tokenInput" placeholder="输入管理员 Token...">
-        <div class="status" id="tokenStatus"></div>
+        <label>Admin Token:</label>
+        <input type="password" id="admin-token" placeholder="粘贴 X-Admin-Token（保存在本浏览器）" />
+        <button class="btn btn-sm" onclick="saveToken()">保存</button>
+        <span class="status" id="token-status">未验证</span>
     </div>
 
-    <!-- Tabs -->
-    <div class="tabs">
-        <button class="tab active" data-tab="query">查询</button>
-        <button class="tab" data-tab="renew">续期</button>
-        <button class="tab" data-tab="offline">离线签发</button>
-        <button class="tab" data-tab="forget">重置设备</button>
+    <div class="container">
+        <div class="stats">
+            <div class="stat s-total"><div class="num" id="st-total">–</div><div class="lbl">设备总数</div></div>
+            <div class="stat s-active"><div class="num" id="st-active">–</div><div class="lbl">有效授权（30天以上）</div></div>
+            <div class="stat s-soon"><div class="num" id="st-soon">–</div><div class="lbl">30天内到期</div></div>
+            <div class="stat s-expired"><div class="num" id="st-expired">–</div><div class="lbl">已过期</div></div>
+        </div>
+
+        <div class="toolbar">
+            <input type="text" id="search-box" placeholder="搜索：机器码 / 客户名称 / 备注…" />
+            <select id="app-filter">
+                <option value="">全部应用</option>
+                <option value="ControlCommand">ControlCommand</option>
+                <option value="E-Player">E-Player</option>
+                <option value="WinPilot">WinPilot</option>
+                <option value="iCMS">iCMS</option>
+                <option value="rust-node">rust-node</option>
+            </select>
+            <button class="btn" onclick="loadDevices()">↻ 刷新</button>
+            <button class="btn btn-primary" onclick="openIssueModal()">＋ 签发授权</button>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>应用</th><th>机器码（点击复制）</th><th>客户名称</th><th>备注</th>
+                        <th>到期日期</th><th>状态</th><th>最近出现</th><th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="device-rows">
+                    <tr><td colspan="8" class="dim">加载中…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="summary-line" id="list-summary"></div>
     </div>
 
-    <!-- Query Panel -->
-    <div class="panel active" id="panel-query">
-        <div class="card">
-            <div class="row">
-                <div class="field">
-                    <label>应用名称</label>
-                    <select id="q-app">
+    <!-- 续期弹窗 -->
+    <div class="modal-mask" id="renew-mask">
+        <div class="modal">
+            <h3>续期授权</h3>
+            <div class="field"><label>应用 / 机器码</label>
+                <input type="text" id="rn-target" readonly />
+            </div>
+            <div class="row2">
+                <div class="field"><label>客户名称</label><input type="text" id="rn-customer" placeholder="（可留空）" /></div>
+                <div class="field"><label>备注</label><input type="text" id="rn-notes" placeholder="（可留空）" /></div>
+            </div>
+            <div class="row2">
+                <div class="field"><label>到期日期 *</label><input type="date" id="rn-expires" /></div>
+                <div class="field"><label>授权类型</label>
+                    <select id="rn-type"><option value="paid">付费 (paid)</option><option value="trial">试用 (trial)</option></select>
+                </div>
+            </div>
+            <label class="check"><input type="checkbox" id="rn-supersede" /> 签发前吊销该设备旧授权（缩短有效期时勾选）</label>
+            <div class="msg" id="rn-msg"></div>
+            <div class="foot">
+                <button class="btn" onclick="closeModal('renew-mask')">取消</button>
+                <button class="btn btn-primary" onclick="doRenew()">续期签发</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 签发弹窗（新设备/离线） -->
+    <div class="modal-mask" id="issue-mask">
+        <div class="modal">
+            <h3>签发授权</h3>
+            <div class="row2">
+                <div class="field"><label>应用</label>
+                    <select id="is-app">
                         <option value="ControlCommand">ControlCommand</option>
                         <option value="E-Player">E-Player</option>
                         <option value="WinPilot">WinPilot</option>
@@ -346,309 +164,198 @@
                         <option value="rust-node">rust-node</option>
                     </select>
                 </div>
-                <div class="field">
-                    <label>机器码</label>
-                    <input type="text" id="q-machine" placeholder="ABCD-1234-EFGH">
+                <div class="field"><label>授权类型</label>
+                    <select id="is-type"><option value="paid">付费 (paid)</option><option value="trial">试用 (trial)</option></select>
                 </div>
             </div>
-            <button class="btn btn-primary" onclick="doQuery()">查询</button>
-            <div class="result" id="q-result"></div>
+            <div class="field"><label>机器码 *</label><input type="text" id="is-machine" placeholder="粘贴 64 位机器码" /></div>
+            <div class="row2">
+                <div class="field"><label>客户名称</label><input type="text" id="is-customer" placeholder="（可留空）" /></div>
+                <div class="field"><label>备注</label><input type="text" id="is-notes" placeholder="（可留空）" /></div>
+            </div>
+            <div class="field"><label>到期日期 *</label><input type="date" id="is-expires" /></div>
+            <label class="check"><input type="checkbox" id="is-offline" /> 离线签发（产出授权码，供无法联网的设备手动导入）</label>
+            <label class="check"><input type="checkbox" id="is-supersede" /> 签发前吊销该设备旧授权（缩短有效期时勾选）</label>
+            <div class="msg" id="is-msg"></div>
+            <div class="foot">
+                <button class="btn" onclick="closeModal('issue-mask')">取消</button>
+                <button class="btn btn-primary" onclick="doIssue()">签发</button>
+            </div>
         </div>
     </div>
 
-    <!-- Renew Panel -->
-    <div class="panel" id="panel-renew">
-        <div class="card">
-            <div class="row">
-                <div class="field">
-                    <label>应用名称</label>
-                    <select id="r-app">
-                        <option value="ControlCommand">ControlCommand</option>
-                        <option value="E-Player">E-Player</option>
-                        <option value="WinPilot">WinPilot</option>
-                        <option value="iCMS">iCMS</option>
-                        <option value="rust-node">rust-node</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label>授权类型</label>
-                    <select id="r-type">
-                        <option value="paid">付费 (paid)</option>
-                        <option value="trial">试用 (trial)</option>
-                    </select>
-                </div>
-            </div>
-            <div class="field">
-                <label>机器码</label>
-                <input type="text" id="r-machine" placeholder="ABCD-1234-EFGH">
-            </div>
-            <div class="row">
-                <div class="field">
-                    <label>到期日期</label>
-                    <input type="date" id="r-expires">
-                </div>
-                <div class="field">
-                    <label>客户名称（可选）</label>
-                    <input type="text" id="r-customer" placeholder="客户名">
-                </div>
-            </div>
-            <div class="field">
-                <label>备注（可选）</label>
-                <input type="text" id="r-notes" placeholder="备注信息">
-            </div>
-            <label style="display:flex;align-items:center;gap:6px;margin:8px 0;font-size:13px;color:#9aa4b2">
-                <input type="checkbox" id="r-supersede"> 签发前吊销该设备全部旧授权（缩短有效期时必勾，否则客户端仍取最长记录）
-            </label>
-            <button class="btn btn-primary" onclick="doRenew()">续期签发</button>
-            <div class="result" id="r-result"></div>
-        </div>
-    </div>
+    <script>
+    const API_BASE = '';
+    let currentDevice = null;
 
-    <!-- Offline Panel -->
-    <div class="panel" id="panel-offline">
-        <div class="card">
-            <div class="row">
-                <div class="field">
-                    <label>应用名称</label>
-                    <select id="o-app">
-                        <option value="ControlCommand">ControlCommand</option>
-                        <option value="E-Player">E-Player</option>
-                        <option value="WinPilot">WinPilot</option>
-                        <option value="iCMS">iCMS</option>
-                        <option value="rust-node">rust-node</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label>授权类型</label>
-                    <select id="o-type">
-                        <option value="paid">付费 (paid)</option>
-                        <option value="trial">试用 (trial)</option>
-                    </select>
-                </div>
-            </div>
-            <div class="field">
-                <label>机器码</label>
-                <input type="text" id="o-machine" placeholder="ABCD-1234-EFGH">
-            </div>
-            <div class="row">
-                <div class="field">
-                    <label>到期日期</label>
-                    <input type="date" id="o-expires">
-                </div>
-                <div class="field">
-                    <label>客户名称（可选）</label>
-                    <input type="text" id="o-customer" placeholder="客户名">
-                </div>
-            </div>
-            <div class="field">
-                <label>备注（可选）</label>
-                <input type="text" id="o-notes" placeholder="备注信息">
-            </div>
-            <button class="btn btn-primary" onclick="doOffline()">离线签发</button>
-            <div class="result" id="o-result"></div>
-        </div>
-    </div>
-
-    <!-- Forget Panel：删除硬件记录（测试设备重新申请试用） -->
-    <div class="panel" id="panel-forget">
-        <div class="card">
-            <div class="row">
-                <div class="field">
-                    <label>应用名称</label>
-                    <select id="f-app">
-                        <option value="ControlCommand">ControlCommand</option>
-                        <option value="E-Player">E-Player</option>
-                        <option value="WinPilot">WinPilot</option>
-                        <option value="iCMS">iCMS</option>
-                        <option value="rust-node">rust-node</option>
-                    </select>
-                </div>
-            </div>
-            <div class="field">
-                <label>机器码</label>
-                <input type="text" id="f-machine" placeholder="粘贴设备机器码">
-            </div>
-            <button class="btn btn-primary" style="background:#c0392b;border-color:#a93226" onclick="doForget()">删除该设备全部记录</button>
-            <div class="result" id="f-result"></div>
-        </div>
-    </div>
-</div>
-
-<script>
-    // --- Config ---
-    const API_BASE = location.origin;
-
-    // --- State ---
-    const tokenInput = document.getElementById('tokenInput');
-    const tokenStatus = document.getElementById('tokenStatus');
-
-    tokenInput.addEventListener('input', () => {
-        tokenStatus.classList.toggle('active', tokenInput.value.trim().length > 0);
-    });
-
-    // --- Tabs ---
-    document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-            tab.classList.add('active');
-            document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
-        });
-    });
-
-    // --- Helpers ---
-    function getToken() {
-        return tokenInput.value.trim();
+    function getToken() { return localStorage.getItem('admin_token') || ''; }
+    function saveToken() {
+        const v = document.getElementById('admin-token').value.trim();
+        localStorage.setItem('admin_token', v);
+        const st = document.getElementById('token-status');
+        st.textContent = v ? '已保存' : '未验证';
+        st.className = 'status' + (v ? ' active' : '');
+        loadDevices();
     }
-
-    function escapeHtml(value) {
-        const el = document.createElement('div');
-        el.textContent = String(value);
-        return el.innerHTML;
-    }
-
-    function showResult(id, ok, data) {
-        const el = document.getElementById(id);
-        el.classList.add('show');
-        const labelClass = ok ? 'ok' : 'err';
-        const labelText = ok ? 'SUCCESS' : 'ERROR';
-
-        data = JSON.parse(JSON.stringify(data, (key, value) =>
-            typeof value === 'string' ? escapeHtml(value) : value
-        ));
-        let html = `<div class="result-header"><span class="label ${labelClass}">${labelText}</span></div>`;
-
-        if (ok && data && data.license_key) {
-            html += `
-                <div class="info-row"><span class="k">Issue ID</span><span class="v">${data.issue_id || '-'}</span></div>
-                <div class="info-row"><span class="k">应用</span><span class="v">${data.app_name || '-'}</span></div>
-                <div class="info-row"><span class="k">类型</span><span class="v">${data.license_type || '-'}</span></div>
-                <div class="info-row"><span class="k">渠道</span><span class="v">${data.channel || '-'}</span></div>
-                <div class="info-row"><span class="k">签发时间</span><span class="v">${data.issued_at || '-'}</span></div>
-                <div class="info-row"><span class="k">到期时间</span><span class="v">${data.expires_at || '-'}</span></div>
-                <div class="info-row"><span class="k">机器码后4位</span><span class="v">${data.machine_code_last4 || '-'}</span></div>
-                <div class="license-key">
-                    <button class="copy-btn" onclick="copyKey(this)">复制</button>
-                    ${data.license_key}
-                </div>
-            `;
-        } else if (ok && data && data.items) {
-            if (data.items.length === 0) {
-                html += `<div class="empty">未找到授权记录</div>`;
-            } else {
-                data.items.forEach((item, i) => {
-                    html += `
-                        <div style="margin-bottom:16px;${i > 0 ? 'border-top:1px solid var(--border);padding-top:16px;' : ''}">
-                            <div class="info-row"><span class="k">Issue ID</span><span class="v">${item.issue_id}</span></div>
-                            <div class="info-row"><span class="k">类型</span><span class="v">${item.license_type}</span></div>
-                            <div class="info-row"><span class="k">渠道</span><span class="v">${item.channel}</span></div>
-                            <div class="info-row"><span class="k">状态</span><span class="v">${item.status}</span></div>
-                            <div class="info-row"><span class="k">签发时间</span><span class="v">${item.issued_at}</span></div>
-                            <div class="info-row"><span class="k">到期时间</span><span class="v">${item.expires_at}</span></div>
-                            <div class="info-row"><span class="k">客户</span><span class="v">${item.customer_name || '-'}</span></div>
-                            <div class="info-row"><span class="k">备注</span><span class="v">${item.notes || '-'}</span></div>
-                            <div class="info-row"><span class="k">创建者</span><span class="v">${item.created_by}</span></div>
-                        </div>
-                    `;
-                });
-            }
-        } else {
-            html += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
-        }
-
-        el.innerHTML = html;
-    }
-
-    function copyKey(btn) {
-        const key = btn.parentElement.textContent.replace('复制', '').trim();
-        navigator.clipboard.writeText(key).then(() => {
-            btn.textContent = '已复制';
-            setTimeout(() => btn.textContent = '复制', 1500);
-        });
-    }
-
     async function api(path, options = {}) {
         const resp = await fetch(API_BASE + path, {
             ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Admin-Token': getToken(),
-                ...(options.headers || {})
-            }
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': getToken(), ...(options.headers || {}) }
         });
         return resp.json();
     }
+    function fmtMachine(mc) { return (mc.match(/.{1,8}/g) || [mc]).join(' '); }
+    function fmtSeen(ts) { return (ts || '').replace('T', ' ').slice(0, 16); }
+    function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
-    // --- API Calls ---
-    async function doQuery() {
-        const app = document.getElementById('q-app').value;
-        const machine = document.getElementById('q-machine').value.trim();
-        if (!machine) return alert('请输入机器码');
-
-        const res = await api(`/api/v1/licenses/query?app_name=${encodeURIComponent(app)}&machine_code=${encodeURIComponent(machine)}`);
-        showResult('q-result', res.ok, res.ok ? res.data : res);
+    function badge(d) {
+        if (d.license_state === 'expired') return '<span class="badge expired">已过期</span>';
+        if (d.license_state === 'none') return '<span class="badge none">无授权</span>';
+        const soon = new Date(); soon.setDate(soon.getDate() + 30);
+        if (d.expires_at && new Date(d.expires_at.slice(0,10)) <= soon) return '<span class="badge soon">即将到期</span>';
+        return '<span class="badge active">有效</span>';
     }
 
+    async function loadDevices() {
+        const q = document.getElementById('search-box').value.trim();
+        const app = document.getElementById('app-filter').value;
+        const res = await api(`/api/v1/devices?q=${encodeURIComponent(q)}&app_name=${encodeURIComponent(app)}`);
+        const tb = document.getElementById('token-status');
+        if (!res.ok) {
+            document.getElementById('device-rows').innerHTML = `<tr><td colspan="8" class="dim">${esc(res.error || '加载失败（检查 Token）')}</td></tr>`;
+            tb.textContent = 'Token 无效'; tb.className = 'status';
+            return;
+        }
+        tb.textContent = '已连接'; tb.className = 'status active';
+        const { devices, summary } = res.data;
+        document.getElementById('st-total').textContent = summary.total;
+        document.getElementById('st-active').textContent = summary.active;
+        document.getElementById('st-soon').textContent = summary.expiring_soon;
+        document.getElementById('st-expired').textContent = summary.expired;
+        if (!devices.length) {
+            document.getElementById('device-rows').innerHTML = '<tr><td colspan="8" class="dim">暂无设备（设备与服务器交互或签发授权后自动出现在此）</td></tr>';
+            document.getElementById('list-summary').textContent = '';
+            return;
+        }
+        document.getElementById('device-rows').innerHTML = devices.map(d => `
+            <tr>
+                <td>${esc(d.app_name)}</td>
+                <td><span class="mc" title="点击复制完整机器码" onclick="copyMachine(this)" data-mc="${esc(d.machine_code)}">${fmtMachine(d.machine_code.slice(0,16))}…${esc(d.machine_code.slice(-4))}</span></td>
+                <td>${esc(d.customer_name) || '<span class="dim">—</span>'}</td>
+                <td>${esc(d.notes) || '<span class="dim">—</span>'}</td>
+                <td>${d.expires_at ? esc(d.expires_at.slice(0,10)) : '<span class="dim">—</span>'}</td>
+                <td>${badge(d)}</td>
+                <td class="dim">${fmtSeen(d.last_seen)}</td>
+                <td>
+                    <button class="btn btn-sm" onclick='openRenewModal(${JSON.stringify(JSON.stringify(d))})'>续期</button>
+                    <button class="btn btn-sm btn-danger" onclick='doForget(${JSON.stringify(JSON.stringify(d))})'>重置</button>
+                </td>
+            </tr>`).join('');
+        document.getElementById('list-summary').textContent =
+            `共 ${summary.total} 台设备 · 有效 ${summary.active} · 30天内到期 ${summary.expiring_soon} · 已过期 ${summary.expired}`;
+    }
+
+    function copyMachine(el) {
+        navigator.clipboard.writeText(el.dataset.mc).then(() => {
+            const t = el.textContent; el.textContent = '已复制';
+            setTimeout(() => el.textContent = t, 1200);
+        });
+    }
+
+    let searchTimer = null;
+    document.getElementById('search-box').addEventListener('input', () => {
+        clearTimeout(searchTimer); searchTimer = setTimeout(loadDevices, 300);
+    });
+    document.getElementById('app-filter').addEventListener('change', loadDevices);
+
+    // ---- 续期 ----
+    function openRenewModal(dStr) {
+        const d = JSON.parse(dStr);
+        currentDevice = d;
+        document.getElementById('rn-target').value = d.app_name + ' / ' + d.machine_code;
+        document.getElementById('rn-customer').value = d.customer_name || '';
+        document.getElementById('rn-notes').value = d.notes || '';
+        document.getElementById('rn-expires').value = d.expires_at ? d.expires_at.slice(0,10) : '';
+        document.getElementById('rn-supersede').checked = false;
+        document.getElementById('rn-msg').textContent = '';
+        document.getElementById('renew-mask').classList.add('show');
+    }
     async function doRenew() {
-        const app = document.getElementById('r-app').value;
-        const machine = document.getElementById('r-machine').value.trim();
-        const expires = document.getElementById('r-expires').value;
-        if (!machine) return alert('请输入机器码');
-        if (!expires) return alert('请选择到期日期');
-
-        const res = await api('/api/v1/licenses/renew', {
-            method: 'POST',
-            body: JSON.stringify({
-                app_name: app,
-                machine_code: machine,
-                expires_at: expires,
-                license_type: document.getElementById('r-type').value,
-                customer_name: document.getElementById('r-customer').value.trim(),
-                notes: document.getElementById('r-notes').value.trim(),
-                supersede: document.getElementById('r-supersede').checked
-            })
-        });
-        showResult('r-result', res.ok, res.ok ? res.data : res);
+        const d = currentDevice;
+        const expires = document.getElementById('rn-expires').value;
+        const msg = document.getElementById('rn-msg');
+        if (!expires) { msg.textContent = '请选择到期日期'; msg.className = 'msg err'; return; }
+        msg.textContent = '签发中…'; msg.className = 'msg';
+        const customer = document.getElementById('rn-customer').value.trim();
+        const notes = document.getElementById('rn-notes').value.trim();
+        // 顺带保存客户信息编辑（PATCH 档案；失败不阻断签发）
+        await api('/api/v1/devices', { method: 'PATCH', body: JSON.stringify({
+            app_name: d.app_name, machine_code: d.machine_code, customer_name: customer, notes: notes
+        })}).catch(() => {});
+        const res = await api('/api/v1/licenses/renew', { method: 'POST', body: JSON.stringify({
+            app_name: d.app_name, machine_code: d.machine_code, expires_at: expires,
+            license_type: document.getElementById('rn-type').value,
+            customer_name: customer, notes: notes,
+            supersede: document.getElementById('rn-supersede').checked
+        })});
+        if (res.ok) { msg.textContent = `✓ 已签发至 ${res.data.expires_at}`; msg.className = 'msg ok'; loadDevices(); }
+        else { msg.textContent = res.error || '签发失败'; msg.className = 'msg err'; }
     }
 
-    async function doOffline() {
-        const app = document.getElementById('o-app').value;
-        const machine = document.getElementById('o-machine').value.trim();
-        const expires = document.getElementById('o-expires').value;
-        if (!machine) return alert('请输入机器码');
-        if (!expires) return alert('请选择到期日期');
-
-        const res = await api('/api/v1/licenses/offline-issue', {
-            method: 'POST',
-            body: JSON.stringify({
-                app_name: app,
-                machine_code: machine,
-                expires_at: expires,
-                license_type: document.getElementById('o-type').value,
-                customer_name: document.getElementById('o-customer').value.trim(),
-                notes: document.getElementById('o-notes').value.trim()
-            })
-        });
-        showResult('o-result', res.ok, res.ok ? res.data : res);
+    // ---- 签发（新设备/离线） ----
+    function openIssueModal() {
+        document.getElementById('is-machine').value = '';
+        document.getElementById('is-customer').value = '';
+        document.getElementById('is-notes').value = '';
+        const t = new Date(); t.setFullYear(t.getFullYear() + 1);
+        document.getElementById('is-expires').value = t.toISOString().slice(0,10);
+        document.getElementById('is-offline').checked = false;
+        document.getElementById('is-supersede').checked = false;
+        document.getElementById('is-msg').textContent = '';
+        document.getElementById('issue-mask').classList.add('show');
+    }
+    async function doIssue() {
+        const app = document.getElementById('is-app').value;
+        const machine = document.getElementById('is-machine').value.trim();
+        const expires = document.getElementById('is-expires').value;
+        const offline = document.getElementById('is-offline').checked;
+        const msg = document.getElementById('is-msg');
+        if (!machine) { msg.textContent = '请输入机器码'; msg.className = 'msg err'; return; }
+        if (!expires) { msg.textContent = '请选择到期日期'; msg.className = 'msg err'; return; }
+        msg.textContent = '签发中…'; msg.className = 'msg';
+        const body = {
+            app_name: app, machine_code: machine, expires_at: expires,
+            license_type: document.getElementById('is-type').value,
+            customer_name: document.getElementById('is-customer').value.trim(),
+            notes: document.getElementById('is-notes').value.trim(),
+            supersede: document.getElementById('is-supersede').checked
+        };
+        const url = offline ? '/api/v1/licenses/offline-issue' : '/api/v1/licenses/renew';
+        const res = await api(url, { method: 'POST', body: JSON.stringify(body) });
+        if (res.ok) {
+            if (offline) {
+                msg.innerHTML = `✓ 离线授权码已生成：<br/><textarea rows="3" readonly>${esc(res.data.license_key || JSON.stringify(res.data))}</textarea>`;
+            } else {
+                msg.textContent = `✓ 已签发至 ${res.data.expires_at}`;
+            }
+            msg.className = 'msg ok'; loadDevices();
+        } else { msg.textContent = res.error || '签发失败'; msg.className = 'msg err'; }
     }
 
-    async function doForget() {
-        const app = document.getElementById('f-app').value;
-        const machine = document.getElementById('f-machine').value.trim();
-        if (!machine) return alert('请输入机器码');
-        if (!confirm('将删除该机器码的【全部授权记录 + 设备凭证 + 未用挑战】，不可恢复；\n删除后设备可重新申请试用。确认重置？')) return;
-
-        const res = await api('/api/v1/devices/forget', {
-            method: 'POST',
-            body: JSON.stringify({ app_name: app, machine_code: machine })
-        });
-        showResult('f-result', res.ok, res.ok ? res.data : res);
+    // ---- 重置（forget） ----
+    async function doForget(dStr) {
+        const d = JSON.parse(dStr);
+        if (!confirm(`将删除 ${d.app_name} / ${fmtMachine(d.machine_code)}\n的全部授权记录与设备凭证（不可恢复），\n删除后设备可重新申请试用。确认重置？`)) return;
+        const res = await api('/api/v1/devices/forget', { method: 'POST', body: JSON.stringify({ app_name: d.app_name, machine_code: d.machine_code }) });
+        if (res.ok) { alert(`已重置（清除 ${res.data.removed_issues} 条授权记录）`); loadDevices(); }
+        else alert(res.error || '重置失败');
     }
 
-    // Set default date
-    document.getElementById('r-expires').value = new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0];
-    document.getElementById('o-expires').value = new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0];
-</script>
-
+    // 初始化
+    document.getElementById('admin-token').value = getToken();
+    if (getToken()) { document.getElementById('token-status').textContent = '已保存'; document.getElementById('token-status').className = 'status active'; }
+    loadDevices();
+    </script>
 </body>
 </html>

@@ -105,6 +105,13 @@ def _issue_record(
         ),
         conn=conn,
     )
+    # 设备档案 upsert（列表/搜索/客户信息载体；trial/renew/offline 统一在此建档）
+    try:
+        touch_device(app, app_name=app_name, machine_code=normalized_machine_code,
+                     customer_name=customer_name, notes=notes, conn=conn)
+    except Exception as _e:  # 档案失败不阻断签发（主流程已落库）
+        import traceback; traceback.print_exc()
+
     return {
         "issue_id": issue_id,
         "license_key": license_token,
@@ -458,6 +465,129 @@ def revoke_device(app, *, app_name, machine_code):
                     machine_code_hash=machine_hash, conn=conn,
                 )
         return bool(updated)
+    finally:
+        conn.close()
+
+
+def touch_device(app, *, app_name, machine_code, customer_name="", notes="", conn=None):
+    """设备档案 upsert：所有签发入口（试用/续期/离线/注册）收到机器码即建档。
+    customer_name/notes 仅在非空时覆盖（保留既有客户信息）。"""
+    machine_code = check_machine_code(machine_code)
+    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    own = conn is None  # 外部事务中复用连接（trial 通道），否则自开事务
+    if own:
+        conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        if own:
+            conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            INSERT INTO device_registry (app_name, machine_code_hash, machine_code,
+                                         customer_name, notes, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(app_name, machine_code_hash) DO UPDATE SET
+                last_seen = excluded.last_seen,
+                customer_name = CASE WHEN ? != '' THEN ? ELSE customer_name END,
+                notes = CASE WHEN ? != '' THEN ? ELSE notes END
+            """,
+            [app_name, machine_hash, machine_code, customer_name, notes, now, now,
+             customer_name, customer_name, notes, notes],
+        )
+        if own:
+            conn.commit()
+    except Exception:
+        if own:
+            conn.rollback()
+        raise
+    finally:
+        if own:
+            conn.close()
+
+
+def update_device_meta(app, *, app_name, machine_code, customer_name=None, notes=None):
+    """编辑设备档案的客户名/备注（列表页维护客户信息）"""
+    machine_code = check_machine_code(machine_code)
+    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """
+            UPDATE device_registry SET
+                customer_name = COALESCE(?, customer_name),
+                notes = COALESCE(?, notes)
+            WHERE app_name = ? AND machine_code_hash = ?
+            """,
+            [customer_name, notes, app_name, machine_hash],
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise ValueError("设备档案不存在（该机器码尚未与服务器交互）")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"updated": True}
+
+
+def list_devices(app, *, q="", app_name=""):
+    """设备列表（模糊搜索机器码/客户/备注）+ 每设备最新有效授权 + 首页统计"""
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        rows = conn.execute(
+            "SELECT * FROM device_registry ORDER BY last_seen DESC"
+        ).fetchall()
+        out = []
+        now_date = dt.datetime.now(dt.timezone.utc).date()
+        for row in rows:
+            if app_name and row["app_name"] != app_name:
+                continue
+            latest = conn.execute(
+                """
+                SELECT expires_at, status FROM license_issues
+                WHERE app_name = ? AND machine_code_hash = ? AND status = 'active'
+                ORDER BY expires_at DESC LIMIT 1
+                """,
+                [row["app_name"], row["machine_code_hash"]],
+            ).fetchone()
+            expires = latest["expires_at"] if latest else None
+            if expires:
+                try:
+                    expired = dt.datetime.strptime(expires[:10], "%Y-%m-%d").date() < now_date
+                except ValueError:
+                    expired = False
+                state = "expired" if expired else "active"
+            else:
+                state = "none"
+            out.append({
+                "app_name": row["app_name"],
+                "machine_code": row["machine_code"],
+                "customer_name": row["customer_name"],
+                "notes": row["notes"],
+                "first_seen": row["first_seen"],
+                "last_seen": row["last_seen"],
+                "expires_at": expires,
+                "license_state": state,
+            })
+        # 模糊搜索（机器码/客户/备注，大小写不敏感）
+        if q:
+            ql = q.lower()
+            out = [d for d in out if ql in d["machine_code"].lower()
+                   or ql in d["customer_name"].lower()
+                   or ql in d["notes"].lower()]
+        today = now_date
+        soon = today + dt.timedelta(days=30)
+        summary = {
+            "total": len(out),
+            "active": sum(1 for d in out if d["license_state"] == "active"
+                          and d["expires_at"] and d["expires_at"][:10] > soon.isoformat()),
+            "expiring_soon": sum(1 for d in out if d["license_state"] == "active"
+                                 and d["expires_at"] and today.isoformat() <= d["expires_at"][:10] <= soon.isoformat()),
+            "expired": sum(1 for d in out if d["license_state"] == "expired"),
+        }
+        return {"devices": out, "summary": summary}
     finally:
         conn.close()
 
