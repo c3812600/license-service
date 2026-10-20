@@ -560,7 +560,7 @@ User-Agent: {AppName}-License-Client/{version}
 | --- | --- |
 | 用户自助解绑 | 后台按 `license_id` 释放绑定次数；限制 N 次/年（如 3） |
 | 供应商强制解绑 | 审计日志必留 |
-| 解绑后旧 Token | 服务端可标记 `revoked`；客户端联网校验时应拒绝（见第八章 validate） |
+| 解绑后旧 Token | 服务端标记 `revoked` 后 `latest` 不再返回——**在线设备经 supersede/latest 同步已闭环**（见 §续签·降期）；已下发的离线 Token 本地验签在有效期内仍成立（离线验签固有边界） |
 | 未联网 | 本地仍按 `expires_at` 有效，直至下次联网同步 |
 
 ---
@@ -608,7 +608,7 @@ User-Agent: {AppName}-License-Client/{version}
 ```
 
 要点：
-- 本仓库的设备认证拾取和管理员登记/吊销**仅约束联网取回**；尚无完整许可证吊销同步、设备换绑或客户端实现。已签离线 Token 不会因吊销设备公钥而自动失效。旧现网 `GET latest` 仍不得当作安全恢复接口。
+- 本仓库的设备认证拾取和管理员登记/吊销**仅约束联网取回**：在线设备的吊销/降期经 `renew`+`supersede` → `latest` 复查已闭环（见下）；**已签离线 Token 不会因吊销而自动失效**（本地验签固有特性）。旧现网 `GET latest` 仍不得当作安全恢复接口。
 - **缩短有效期（降期）的标准操作**：`renew` + `"supersede": true`（管理页续期弹窗
   即「签发前吊销该设备旧授权」勾选项）。服务端先吊销该设备全部旧 active 授权
   （`latest` 只返回未吊销且未过期记录），再签发新的短期限授权——**缩短时必须勾选**，
@@ -659,18 +659,18 @@ User-Agent: {AppName}-License-Client/{version}
 | 范围 | 动作与路径 | 鉴权/请求 | 响应与限制 |
 | --- | --- | --- | --- |
 | 本仓库 | `GET /api/v1/health`、`GET /api/v1/public-key` | 无 | 健康信息、公钥 PEM；公钥仅供构建期独立核对 |
-| 本仓库（尚未部署） | `POST /api/v1/devices/challenge` | `app_name`、`machine_code`、`action=trial/latest/register` | 一次性 `challenge`：trial/latest 120 秒，人工 register 900 秒；公开领取，需代理限流 |
-| 本仓库（尚未部署） | `POST /api/v1/trial/apply` | `app_name`、`machine_code`、`device_public_key`、`challenge`、`signature`；可选 `trial_days` | 首次绑定设备公钥并签发试用；重复领取须原私钥；忽略可选 `fingerprint_ver` |
-| 本仓库（尚未部署） | `POST /api/v1/licenses/latest` | 已登记设备对 `latest` 挑战签名 | 仅未过期、active 的在线 Token；不返回 `offline_manual`；无有效授权 404，不等于吊销 |
-| 本仓库（尚未部署） | `POST /api/v1/devices/register`、`POST /api/v1/devices/revoke` | 管理员 Token；登记时还需新私钥对 `register` 挑战的签名 | 管理员人工登记/轮换/停用设备公钥；停用不撤销已有签名授权 |
-| 本仓库 | `POST /api/v1/licenses/renew`、`POST /api/v1/licenses/offline-issue` | `X-Admin-Token` + `app_name`、`machine_code`、`expires_at` 等 | 新签 Token；不撤销已有 Token；不得从客户端携带管理员 Token |
+| 本仓库（**已部署**，2026-10-18 起强制） | `POST /api/v1/devices/challenge` | `app_name`、`machine_code`、`action=trial/latest/register` | 一次性 `challenge`：trial/latest 120 秒，人工 register 900 秒；公开领取，需代理限流 |
+| 本仓库（**已部署**） | `POST /api/v1/trial/apply` | `app_name`、`machine_code`、`device_public_key`、`challenge`、`signature`；可选 `trial_days` | 首次绑定设备公钥并签发试用；重复领取须原私钥；忽略可选 `fingerprint_ver` |
+| 本仓库（**已部署**） | `POST /api/v1/licenses/latest` | 已登记设备对 `latest` 挑战签名 | 仅未过期、active 的在线 Token；不返回 `offline_manual`；无有效授权 404，不等于吊销 |
+| 本仓库（**已部署**） | `POST /api/v1/devices/register`、`POST /api/v1/devices/revoke` | 管理员 Token；登记时还需新私钥对 `register` 挑战的签名 | 管理员人工登记/轮换/停用设备公钥；停用不撤销已有签名授权 |
+| 本仓库 | `POST /api/v1/licenses/renew`、`POST /api/v1/licenses/offline-issue` | `X-Admin-Token` + `app_name`、`machine_code`、`expires_at` 等 | 新签 Token；默认不撤销已有 Token，**缩短到期必须带 `"supersede": true`**（见 §续签·降期）；不得从客户端携带管理员 Token |
 | 本仓库 | `GET /api/v1/licenses/query`、`GET /api/v1/stats` | `X-Admin-Token` | 仅管理员查询或统计；`/admin`、`/admin/stats` 为管理页面 |
-| 已部署旧版（待替换） | `GET /api/v1/licenses/latest` | 只读探测无参数返回 400 | 此路由虽已部署，却不能安全认证设备；新版本将移除 GET，旧客户端必须升级 |
+| **已移除** | `GET /api/v1/licenses/latest` | 现返回 **405** | 旧接口已删除，不能安全认证设备；旧客户端必须升级到设备签名版 |
 | 现网观察 | `GET /api/v1/stats`、`GET /admin/stats` | 未授权时 stats API 返回 401 | 路由可达；未验证管理员实际数据 |
-| 目标未上线 | `/api/v1/activate`、`/api/v1/validate` | 接口待定稿 | 2026-10-17 公网 GET 返回 404；也没有对应本仓库路由 |
+| 目标未上线（**可选，不阻塞闭环**） | `/api/v1/activate`、`/api/v1/validate` | 接口待定稿 | 在线收紧心跳已由 `latest` + 客户端周期复查覆盖（默认 6 小时，间隔可配）——吊销/降期经 `renew+supersede` 后下次复查即生效；`validate` 仅对非本协议的第三方客户端有价值 |
 
 客户端在拿到 `license_key` 后，**必须本地验签通过才落盘**，不得信任服务端仅返回成功。
-`latest` 的机器码可被获知/仿造，不是身份认证；旧 GET 接口不得继续使用。认证新版的 HTTP 404 仅表示此次查询无可领取的 active 在线授权，路由不存在、网络故障、设备凭据停用或离线授权不能据此判定为许可证吊销；完整吊销同步/稳定业务码仍是目标。
+`latest` 的机器码可被获知/仿造，不是身份认证；旧 GET 接口不得继续使用。认证新版的 HTTP 404 仅表示此次查询无可领取的 active 在线授权，路由不存在、网络故障、设备凭据停用或离线授权不能据此判定为许可证吊销。**在线设备的吊销/降期同步已闭环**（`renew`+`supersede` 吊旧签新，`latest` 复查生效，见 §续签）；已下发的离线 Token 收不回（离线验签固有边界）；稳定业务码仍是目标。
 
 **设备签名契约（本仓库实现，需客户端升级；与发行方 Token 的 Ed25519 密钥对完全独立）：**
 
