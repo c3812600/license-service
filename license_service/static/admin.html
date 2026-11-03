@@ -256,8 +256,29 @@
             `共 ${summary.total} 台设备 · 有效 ${summary.active} · 30天内到期 ${summary.expiring_soon} · 已过期 ${summary.expired}`;
     }
 
+    function copyText(text) {
+        // HTTPS 走 clipboard API；纯 HTTP（局域网 IP:8765）无安全上下文，退回选中+execCommand
+        if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+        return new Promise((resolve, reject) => {
+            const ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy') ? resolve() : reject(); }
+            catch (e) { reject(e); } finally { ta.remove(); }
+        });
+    }
+    function copyLicenseKey(btn) {
+        const key = document.getElementById('offline-key').value;
+        copyText(key).then(() => {
+            const t = btn.textContent; btn.textContent = '✓ 已复制';
+            setTimeout(() => btn.textContent = t, 1200);
+        }).catch(() => {
+            const t = btn.textContent; btn.textContent = '复制失败，请全选手动复制';
+            setTimeout(() => btn.textContent = t, 2000);
+        });
+    }
     function copyMachine(el) {
-        navigator.clipboard.writeText(el.dataset.mc).then(() => {
+        copyText(el.dataset.mc).then(() => {
             const t = el.textContent; el.textContent = '已复制';
             setTimeout(() => el.textContent = t, 1200);
         });
@@ -335,7 +356,7 @@
         const res = await api(url, { method: 'POST', body: JSON.stringify(body) });
         if (res.ok) {
             if (offline) {
-                msg.innerHTML = `✓ 离线授权码已生成：<br/><textarea rows="3" readonly>${esc(res.data.license_key || JSON.stringify(res.data))}</textarea>`;
+                msg.innerHTML = `✓ 离线授权码已生成：<br/><textarea id="offline-key" rows="3" readonly onclick="this.select()">${esc(res.data.license_key || JSON.stringify(res.data))}</textarea><br/><button class="btn btn-sm" onclick="copyLicenseKey(this)" style="margin-top:6px">📋 复制授权码</button>`;
             } else {
                 msg.textContent = `✓ 已签发至 ${res.data.expires_at}`;
             }
