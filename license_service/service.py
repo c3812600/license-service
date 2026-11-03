@@ -305,6 +305,23 @@ def query_licenses(app, *, app_name, machine_code):
     return [dict(row) for row in rows]
 
 
+def fetch_active_license_key(app, *, app_name, machine_code):
+    """管理端取设备当前有效的完整授权码（人工复制发放用，含离线签发单）。"""
+    validate_app_name(app, app_name)
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    rows = fetch_all(
+        app.config["DATABASE_PATH"],
+        """
+        SELECT issue_id, license_token AS license_key, license_type, channel, issued_at, expires_at
+        FROM license_issues
+        WHERE app_name=? AND machine_code_hash=? AND status='active' AND expires_at>=?
+        ORDER BY expires_at DESC, id DESC LIMIT 1
+        """,
+        [app_name, machine_code_hash, dt.date.today().isoformat()],
+    )
+    return dict(rows[0]) if rows else None
+
+
 def license_stats(app):
     current_date = dt.date.today()
     today = current_date.isoformat()

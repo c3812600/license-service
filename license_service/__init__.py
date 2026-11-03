@@ -8,7 +8,7 @@ from .crypto import ensure_keypair
 from .db import init_db
 from .device_auth import create_challenge
 from .service import (
-    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_machine, query_licenses, register_device, renew_license, revoke_device, validate_app_name, list_devices, update_device_meta, touch_device,
+    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_machine, query_licenses, register_device, renew_license, revoke_device, validate_app_name, list_devices, update_device_meta, touch_device, fetch_active_license_key,
 )
 
 
@@ -268,6 +268,26 @@ def create_app():
             return _ok({"items": rows})
         except ValueError as exc:
             return _error(str(exc), 400)
+
+    @app.get("/api/v1/licenses/active_key")
+    def admin_active_key():
+        """管理端取设备当前有效授权码（复制发放用），不走设备签名。"""
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        app_name = (request.args.get("app_name") or "").strip()
+        machine_code = (request.args.get("machine_code") or "").strip()
+        if not app_name:
+            return _error("app_name is required")
+        if not machine_code:
+            return _error("machine_code is required")
+        try:
+            row = fetch_active_license_key(app, app_name=app_name, machine_code=machine_code)
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        if not row:
+            return _error("该设备当前没有有效授权码", 404)
+        return _ok(row)
 
     @app.post("/api/v1/devices/forget")
     def admin_forget_device():

@@ -44,8 +44,19 @@
 
         .table-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        th, td { padding: 9px 11px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
         th { color: var(--text-dim); font-weight: 500; font-size: 12px; background: #161923; }
+        /* 操作列右侧固定：横向滚动时按钮永不被裁掉 */
+        th.ops, td.ops { position: sticky; right: 0; box-shadow: -8px 0 10px -8px rgba(0,0,0,.55); }
+        td.ops { background: var(--card); }
+        th.ops { background: #161923; }
+        tr:hover td.ops { background: #1e2130; }
+        @media (max-width: 1280px) {
+            th, td { padding: 8px 9px; }
+            .container { padding: 16px 14px 50px; }
+            .stat { padding: 11px 13px; }
+            .stat .num { font-size: 21px; }
+        }
         tr:last-child td { border-bottom: none; }
         tr:hover td { background: #1e2130; }
         .mc { font-family: ui-monospace, Consolas, monospace; font-size: 12px; letter-spacing: 0.5px; cursor: pointer; }
@@ -113,7 +124,7 @@
                 <thead>
                     <tr>
                         <th>应用</th><th>机器码（点击复制）</th><th>客户名称</th><th>备注</th>
-                        <th>到期日期</th><th>状态</th><th>最近出现</th><th>操作</th>
+                        <th>到期日期</th><th>状态</th><th>最近出现</th><th class="ops">操作</th>
                     </tr>
                 </thead>
                 <tbody id="device-rows">
@@ -247,7 +258,8 @@
                 <td>${d.expires_at ? esc(d.expires_at.slice(0,10)) : '<span class="dim">—</span>'}</td>
                 <td>${badge(d)}</td>
                 <td class="dim">${fmtSeen(d.last_seen)}</td>
-                <td>
+                <td class="ops">
+                    <button class="btn btn-sm" title="复制该设备当前有效的授权码" onclick='copyLicenseOf(${JSON.stringify(JSON.stringify(d))}, this)'>📋 授权码</button>
                     <button class="btn btn-sm" onclick='openRenewModal(${JSON.stringify(JSON.stringify(d))})'>续期</button>
                     <button class="btn btn-sm btn-danger" onclick='doForget(${JSON.stringify(JSON.stringify(d))})'>重置</button>
                 </td>
@@ -282,6 +294,24 @@
             const t = el.textContent; el.textContent = '已复制';
             setTimeout(() => el.textContent = t, 1200);
         });
+    }
+
+    async function copyLicenseOf(dStr, btn) {
+        const d = JSON.parse(dStr);
+        const t = btn.textContent;
+        const res = await api('/api/v1/licenses/active_key?app_name=' + encodeURIComponent(d.app_name) + '&machine_code=' + encodeURIComponent(d.machine_code));
+        if (res && res.data && res.data.license_key) {
+            copyText(res.data.license_key).then(() => {
+                btn.textContent = '✓ 已复制';
+                setTimeout(() => btn.textContent = t, 1200);
+            }).catch(() => {
+                btn.textContent = '复制失败';
+                setTimeout(() => btn.textContent = t, 1500);
+            });
+        } else {
+            btn.textContent = (res && res.error) ? res.error : '无有效授权';
+            setTimeout(() => btn.textContent = t, 1800);
+        }
     }
 
     let searchTimer = null;
