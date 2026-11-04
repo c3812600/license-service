@@ -8,6 +8,7 @@ from .crypto import (
     hash_machine_code,
     normalize_machine_code,
     sign_license_payload,
+    verify_license_payload,
 )
 from .device_auth import check_machine_code, decode_public_key, device_key, verify_proof
 from .db import connect_db, execute, fetch_all
@@ -464,7 +465,33 @@ def fetch_latest_license(app, *, app_name, machine_code, challenge, signature):
         conn.close()
 
 
-def register_device(app, *, app_name, machine_code, device_public_key, challenge, signature):
+def _verify_rotation_license(app, conn, *, license_key, app_name, machine_code, machine_hash):
+    """持证换钥的凭证核验：授权码签名/绑定/有效期 + 吊销不复活 + 每机每日限频。"""
+    payload = verify_license_payload(
+        license_key, app.config["PUBLIC_KEY_PATH"], app_name=app_name,
+    )
+    if payload.get("app_name") != app_name:
+        raise PermissionError("license_key app mismatch")
+    if normalize_machine_code(payload.get("machine_code") or "") != normalize_machine_code(machine_code):
+        raise PermissionError("license_key machine mismatch")
+    if _parse_date(payload.get("expires_at") or "") < _today():
+        raise PermissionError("license_key expired")
+    existing = device_key(conn, app_name, machine_hash)
+    if existing and existing["revoked"]:
+        raise PermissionError("device credential revoked")
+    recent = conn.execute(
+        """SELECT COUNT(*) FROM audit_logs
+           WHERE action='device_rotate' AND app_name=? AND machine_code_hash=?
+             AND created_at >= datetime('now', '-1 day')""",
+        (app_name, machine_hash),
+    ).fetchone()[0]
+    if recent >= 3:
+        raise PermissionError("rotation rate limit exceeded, retry tomorrow")
+
+
+def register_device(app, *, app_name, machine_code, device_public_key, challenge, signature, license_key=""):
+    """登记/更换设备公钥。两种授权等价：管理端 X-Admin-Token（路由层校验），
+    或「持证换钥」——客户端持本机有效授权码自证归属（license_key），免管理员、限频、审计可溯。"""
     validate_app_name(app, app_name)
     machine_code = check_machine_code(machine_code)
     public_key = decode_public_key(device_public_key)
@@ -472,6 +499,15 @@ def register_device(app, *, app_name, machine_code, device_public_key, challenge
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
         conn.execute("BEGIN IMMEDIATE")
+        actor = "admin_api"
+        action = "register_device"
+        if license_key:
+            actor = "device_rotate"
+            action = "device_rotate"
+            _verify_rotation_license(
+                app, conn, license_key=license_key, app_name=app_name,
+                machine_code=machine_code, machine_hash=machine_hash,
+            )
         verify_proof(
             conn, app_name=app_name, machine_code=machine_code, machine_hash=machine_hash,
             action="register", challenge=challenge, signature=signature, public_key=public_key,
@@ -484,7 +520,7 @@ def register_device(app, *, app_name, machine_code, device_public_key, challenge
             (app_name, machine_hash, public_key),
         )
         write_audit_log(
-            app, action="register_device", actor="admin_api", app_name=app_name,
+            app, action=action, actor=actor, app_name=app_name,
             machine_code_hash=machine_hash, conn=conn,
         )
         conn.commit()

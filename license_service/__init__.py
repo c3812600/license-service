@@ -62,6 +62,9 @@ _RATE_LOCK = threading.Lock()
 _RATE_HITS = {}
 # 公开接口限流：路径 -> (次数, 窗口秒)。防御恶意刷挑战/试用（代理限流之外的兜底）。
 _RATE_LIMITS = {
+    # 持证换钥/设备登记是公开可达路径（license_key 方式），按 IP 兜底限流；
+    # 每机换绑次数另有 audit_logs 每日 3 次硬限（见 _verify_rotation_license）
+    "/api/v1/devices/register": (10, 60),
     "/api/v1/devices/challenge": (30, 60),
     "/api/v1/trial/apply": (5, 60),
     "/api/v1/licenses/latest": (10, 60),
@@ -291,17 +294,21 @@ def create_app():
 
     @app.post("/api/v1/devices/register")
     def admin_register_device():
-        auth_error = _require_admin_token(app)
-        if auth_error:
-            return auth_error
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
             return _error("JSON object required")
+        # 双授权路径：管理令牌（管理员登记/轮换）或 license_key（持证换钥——
+        # 客户端持本机有效授权码自证归属，免管理员；核验在 register_device 内）
+        license_key = (data.get("license_key") or "").strip()
+        admin = _require_admin_token(app) is None
+        if not admin and not license_key:
+            return _error("unauthorized", 401)
         try:
             register_device(
                 app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
                 device_public_key=data.get("device_public_key"),
                 challenge=data.get("challenge"), signature=data.get("signature"),
+                license_key="" if admin else license_key,
             )
         except ValueError as exc:
             return _error(str(exc), 400)

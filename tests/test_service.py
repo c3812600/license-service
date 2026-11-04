@@ -576,6 +576,101 @@ class LicenseServiceTests(unittest.TestCase):
         self.assertEqual(codes[:5], [400] * 5)  # 前 5 个走业务校验（缺 app_name）
         self.assertEqual(codes[5], 429)
 
+    def test_rotation_with_license_key_heals_key_drift(self):
+        """持证换钥主路径：持有效授权码自动换绑新公钥，旧钥失效、新钥可拾取。"""
+        machine = "9" * 64
+        old_key = Ed25519PrivateKey.generate()
+        new_key = Ed25519PrivateKey.generate()
+        paid = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": "2030-01-01"},
+        )
+        self.assertEqual(paid.status_code, 200)
+        license_key = paid.json["data"]["license_key"]
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/devices/register",
+                json=self.device_proof("register", machine=machine, key=old_key),
+                headers={"X-Admin-Token": "test-admin"},
+            ).status_code, 200,
+        )
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest",
+                             json=self.device_proof("latest", machine=machine, key=old_key)).status_code, 200,
+        )
+        # 密钥漂移：新钥 + license_key 持证换钥（不带管理令牌）
+        rotate = self.device_proof("register", machine=machine, key=new_key)
+        rotate["license_key"] = license_key
+        self.assertEqual(self.client.post("/api/v1/devices/register", json=rotate).status_code, 200)
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest",
+                             json=self.device_proof("latest", machine=machine, key=new_key)).status_code, 200,
+        )
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest",
+                             json=self.device_proof("latest", machine=machine, key=old_key)).status_code, 403,
+        )
+
+    def test_rotation_rejects_bad_tokens_and_revoked_devices(self):
+        """持证换钥闸门：错机器/过期/伪造授权码拒；吊销不因换绑复活。"""
+        machine = "7" * 64
+        key = Ed25519PrivateKey.generate()
+        paid = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": "2030-01-01"},
+        )
+        license_key = paid.json["data"]["license_key"]
+
+        def rotate(tok):
+            proof = self.device_proof("register", machine=machine, key=key)
+            proof["license_key"] = tok
+            return self.client.post("/api/v1/devices/register", json=proof)
+
+        # 另一台机器的授权码 → 机器不匹配
+        other = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": "B" * 64, "expires_at": "2030-01-01"},
+        ).json["data"]["license_key"]
+        self.assertEqual(rotate(other).status_code, 403)
+        # 过期授权码 → 拒
+        expired = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": "2020-01-01"},
+        ).json["data"]["license_key"]
+        self.assertEqual(rotate(expired).status_code, 403)
+        # 篡改签名 → 拒
+        broken = license_key[:-4] + ("AAAA" if not license_key.endswith("AAAA") else "BBBB")
+        self.assertIn(rotate(broken).status_code, (400, 403))
+        # 吊销后持证也不复活（revoke 语义保留）
+        self.assertEqual(
+            self.client.post("/api/v1/devices/register", json=self.device_proof("register", machine=machine, key=key),
+                             headers={"X-Admin-Token": "test-admin"}).status_code, 200,
+        )
+        self.assertEqual(
+            self.client.post("/api/v1/devices/revoke",
+                             json={"app_name": "ControlCommand", "machine_code": machine},
+                             headers={"X-Admin-Token": "test-admin"}).status_code, 200,
+        )
+        res = rotate(license_key)
+        self.assertEqual(res.status_code, 403)
+        self.assertIn("revoked", res.json["error"])
+
+    def test_rotation_rate_limited_per_machine(self):
+        """每机每日换绑 3 次硬限（audit_logs 计数），第 4 次拒。"""
+        machine = "6" * 64
+        paid = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": "2030-01-01"},
+        )
+        license_key = paid.json["data"]["license_key"]
+        codes = []
+        for _ in range(4):
+            proof = self.device_proof("register", machine=machine, key=Ed25519PrivateKey.generate())
+            proof["license_key"] = license_key
+            codes.append(self.client.post("/api/v1/devices/register", json=proof).status_code)
+        self.assertEqual(codes[:3], [200, 200, 200])
+        self.assertEqual(codes[3], 403)
+
     def test_untrusted_peer_proxy_headers_are_stripped(self):
         """体检 R2：非可信来源伪造 XFF 不被采纳；本机/容器网桥来源才信任。"""
         from license_service import _strip_untrusted_proxy_headers

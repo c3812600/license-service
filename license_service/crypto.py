@@ -113,3 +113,37 @@ def sign_license_payload(payload, private_key_path, app_name=None):
         payload=_b64url_encode(payload_bytes),
         signature=_b64url_encode(signature),
     )
+
+
+def _b64url_decode(text):
+    raw = str(text).encode("ascii")
+    return base64.urlsafe_b64decode(raw + b"=" * (-len(raw) % 4))
+
+
+def verify_license_payload(license_key, public_key_path, app_name=None):
+    """校验服务端自签授权码并返回 payload 字典。
+
+    核验前缀与 Ed25519 签名（覆盖 payload 原始字节，与签发逐字节同构）；
+    调用方再做 app/机器码/到期日绑定核对。失败抛 ValueError/PermissionError。
+    """
+    parts = str(license_key or "").strip().split(".")
+    if len(parts) != 3:
+        raise ValueError("invalid license_key format")
+    prefix, payload_b64, signature_b64 = parts
+    expected = TOKEN_PREFIXES.get(app_name, TOKEN_PREFIX) if app_name else TOKEN_PREFIX
+    if prefix != expected:
+        raise ValueError("license_key prefix mismatch")
+    try:
+        payload_bytes = _b64url_decode(payload_b64)
+        signature = _b64url_decode(signature_b64)
+    except Exception as exc:
+        raise ValueError("invalid license_key encoding") from exc
+    loaded = serialization.load_pem_public_key(Path(public_key_path).read_bytes())
+    der = loaded.public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    try:
+        Ed25519PublicKey.from_public_bytes(der[-32:]).verify(signature, payload_bytes)
+    except Exception as exc:
+        raise PermissionError("license_key signature invalid") from exc
+    return json.loads(payload_bytes.decode("utf-8"))
