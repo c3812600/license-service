@@ -47,10 +47,11 @@
         th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
         /* 备注列：截短到固定宽，隐藏文字可在单元格内横向滚动/拖选，悬停有全文提示 */
         th.notes, td.notes { max-width: 176px; }
-        td.notes .scroll-x { display: block; max-width: 176px; overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: thin; cursor: text; }
-        td.notes .scroll-x::-webkit-scrollbar { height: 4px; }
-        td.notes .scroll-x::-webkit-scrollbar-thumb { background: #444a5e; border-radius: 2px; }
-        td.notes .scroll-x::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+        td.notes .scroll-x { display: block; max-width: 176px; overflow-x: auto; overflow-y: hidden; white-space: nowrap; cursor: text; scrollbar-width: none; }
+        td.notes .scroll-x::-webkit-scrollbar { display: none; }
+        /* 悬停整格渐显细滚动条，平时零视觉噪音 */
+        td.notes:hover .scroll-x::-webkit-scrollbar { display: block; height: 3px; }
+        td.notes:hover .scroll-x::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 2px; }
         th { color: var(--text-dim); font-weight: 500; font-size: 12px; background: #161923; }
         /* 操作列右侧固定：横向滚动时按钮永不被裁掉 */
         th.ops, td.ops { position: sticky; right: 0; box-shadow: -8px 0 10px -8px rgba(0,0,0,.55); }
