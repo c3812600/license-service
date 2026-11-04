@@ -534,6 +534,60 @@ class LicenseServiceTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json["data"]["license_key"], issued["license_key"])
 
+    def test_supersede_failure_rolls_back_and_keeps_old_license(self):
+        """体检 P0-3 回归：吊销+签发单事务，签发失败整体回滚、旧授权不掉。"""
+        machine = "F" * 64
+        first = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": "2030-01-01"},
+        )
+        self.assertEqual(first.status_code, 200)
+        with patch("license_service.service._issue_record", side_effect=OSError("disk full")):
+            failed = self.client.post(
+                "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+                json={
+                    "app_name": "ControlCommand", "machine_code": machine,
+                    "expires_at": "2031-01-01", "supersede": True,
+                },
+            )
+        self.assertEqual(failed.status_code, 500)
+        self.assertFalse(failed.json.get("ok", True))
+        with closing(sqlite3.connect(self.db)) as conn:
+            rows = conn.execute(
+                "SELECT status, expires_at FROM license_issues ORDER BY id"
+            ).fetchall()
+        # 回滚后：只有最初那条付费授权，仍 active 且原到期日
+        self.assertEqual([(r[0], r[1]) for r in rows], [("active", "2030-01-01")])
+
+    def test_rate_limit_returns_429(self):
+        """体检 P1-4 配套：内置限流按 (IP,路径) 计数，超限返回 429。"""
+        from license_service import _RATE_HITS
+
+        _RATE_HITS.clear()
+        self.app.config["RATE_LIMIT_ENABLED"] = True
+        try:
+            codes = [
+                self.client.post("/api/v1/trial/apply", json={}).status_code
+                for _ in range(6)
+            ]
+        finally:
+            self.app.config["RATE_LIMIT_ENABLED"] = False
+            _RATE_HITS.clear()
+        self.assertEqual(codes[:5], [400] * 5)  # 前 5 个走业务校验（缺 app_name）
+        self.assertEqual(codes[5], 429)
+
+    def test_untrusted_peer_proxy_headers_are_stripped(self):
+        """体检 R2：非可信来源伪造 XFF 不被采纳；本机/容器网桥来源才信任。"""
+        from license_service import _strip_untrusted_proxy_headers
+
+        untrusted = {"REMOTE_ADDR": "10.0.0.50", "HTTP_X_FORWARDED_FOR": "1.2.3.4"}
+        _strip_untrusted_proxy_headers(untrusted)
+        self.assertNotIn("HTTP_X_FORWARDED_FOR", untrusted)
+        for peer in ("127.0.0.1", "172.17.0.3"):
+            env = {"REMOTE_ADDR": peer, "HTTP_X_FORWARDED_FOR": "1.2.3.4"}
+            _strip_untrusted_proxy_headers(env)
+            self.assertEqual(env.get("HTTP_X_FORWARDED_FOR"), "1.2.3.4")
+
 
 if __name__ == "__main__":
     unittest.main()

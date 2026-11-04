@@ -691,7 +691,7 @@ license-service/device/v1
 4. 首次 `trial/apply` 除常规字段外提交 `device_public_key`、`challenge`、`signature`；再次申请使用原公钥和新 `trial` 签名。`POST /api/v1/licenses/latest` 使用新 `latest` 挑战，仅提交 `app_name`、`machine_code`、`challenge`、`signature`；不得在 GET URL 传机器码或管理员 Token。管理员 `devices/register` 接收新密钥的 `register` 挑战/签名和 `X-Admin-Token`，可登记或轮换；`devices/revoke` 接收产品/机器码与管理员 Token，仅停用联网取回能力。丢私钥必须走管理员人工审核，不能凭机器码重领；旧 GET 和无签名试用协议不兼容。
 5. 设备私钥用于**取回授权码**，不能代替客户端对返回 Token 做独立的发行方 Ed25519 验签、机器码、产品和日期核对。可用的硬件保护优先，但不假设所有 Windows 版本都支持不可导出的 Ed25519。服务端不返回已过期、已标记撤销或 `offline_manual` 记录；设备公钥停用**不会**让已落盘签名 Token 自动失效。
 
-**本仓库试用规则**：建议客户端显式发送 `trial_days`（§6.3.1）；产品上限由 `LICENSE_SERVICE_TRIAL_DAYS_MAP`（JSON：`{"<app_name>": 天数}`）指定，未配置用全局 `LICENSE_SERVICE_TRIAL_DAYS`（代码默认 365，仓库示例配置为 30）。未传/非法时取产品上限，有效正整数钳制到上限。新签试用以服务端 **UTC 日期**计算首次到期日；响应 `data.trial_days` 是首次实际发放天数。并发请求在数据库事务中串行处理，重复领取新签 Token 但沿用**首次到期日**，已过期后申请返回 409 `trial expired`。代码及示例配置默认允许 `ControlCommand`、`E-Player`、`WinPilot`、`iCMS`、`rust-node`，生产可通过 `LICENSE_SERVICE_ALLOWED_APPS` 收窄。此规则是代码与测试结论，公网还须用安全测试环境单独联调。
+**本仓库试用规则**：建议客户端显式发送 `trial_days`（§6.3.1）；产品上限由 `LICENSE_SERVICE_TRIAL_DAYS_MAP`（JSON：`{"<app_name>": 天数}`）指定，未配置用全局 `LICENSE_SERVICE_TRIAL_DAYS`（代码与示例配置默认 30）。未传/非法时取产品上限，有效正整数钳制到上限。新签试用以服务端 **UTC 日期**计算首次到期日；响应 `data.trial_days` 是首次实际发放天数。并发请求在数据库事务中串行处理，重复领取新签 Token 但沿用**首次到期日**，已过期后申请返回 409 `trial expired`。代码及示例配置默认允许 `ControlCommand`、`E-Player`、`WinPilot`、`iCMS`、`rust-node`，生产可通过 `LICENSE_SERVICE_ALLOWED_APPS` 收窄。此规则是代码与测试结论，公网还须用安全测试环境单独联调。
 
 ### 2. 尚未实现的目标标准接口
 

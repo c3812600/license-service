@@ -592,7 +592,8 @@ def list_devices(app, *, q="", app_name=""):
                    (SELECT l.expires_at FROM license_issues l
                      WHERE l.app_name=r.app_name AND l.machine_code_hash=r.machine_code_hash
                        AND l.status='active'
-                     ORDER BY l.expires_at DESC, l.id DESC LIMIT 1) AS expires_at
+                     ORDER BY CASE WHEN l.license_type='trial' THEN 1 ELSE 0 END,
+                              l.expires_at DESC, l.id DESC LIMIT 1) AS expires_at
             FROM device_registry r
             WHERE (? = '' OR r.app_name = ?)
             ORDER BY r.last_seen DESC

@@ -1,4 +1,5 @@
 import hmac
+import ipaddress
 import logging
 import threading
 import time
@@ -19,6 +20,28 @@ from .service import (
 
 def _error(message, status_code=400):
     return jsonify({"ok": False, "error": message}), status_code
+
+
+# 生产拓扑：cloudflared 容器（172.17.0.3）→ 10.0.0.228:8765，代理头只信任本机/容器网桥来源；
+# 直连 8765 的客户端伪造 X-Forwarded-For 会被剥掉，审计 IP 不可伪造（体检 R2）。
+_TRUSTED_PROXY_NETS = tuple(
+    ipaddress.ip_network(n) for n in ("127.0.0.0/8", "::1/128", "172.16.0.0/12")
+)
+
+
+def _strip_untrusted_proxy_headers(environ):
+    """非可信来源（局域网直连等）的代理头一律剥掉，按真实来源 IP 记审计/限流。"""
+    remote = environ.get("REMOTE_ADDR") or ""
+    try:
+        addr = ipaddress.ip_address(remote)
+    except ValueError:
+        trusted = False
+    else:
+        trusted = any(addr in net for net in _TRUSTED_PROXY_NETS)
+    if not trusted:
+        for key in ("HTTP_X_FORWARDED_FOR", "HTTP_X_FORWARDED_PROTO", "HTTP_X_FORWARDED_HOST"):
+            environ.pop(key, None)
+    return environ
 
 
 def _ok(data=None):
@@ -61,8 +84,14 @@ def _rate_limited(ip, path, limit, window):
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
-    # 真实客户端 IP（审计溯源）：仅信任一层反向代理
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+    # 真实客户端 IP（审计溯源）：只对可信代理来源采纳 XFF——见 _strip_untrusted_proxy_headers
+    inner = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
+    def _trusted_proxy_only(environ, start_response):
+        _strip_untrusted_proxy_headers(environ)
+        return inner(environ, start_response)
+
+    app.wsgi_app = _trusted_proxy_only
 
     static_dir = Path(__file__).resolve().parent / "static"
 
@@ -103,7 +132,8 @@ def create_app():
     @app.errorhandler(Exception)
     def _unhandled(e):
         if isinstance(e, HTTPException):
-            return e
+            # 404/405 等也走 {"ok":false,"error":...} JSON 契约（体检 P2-3 残留）
+            return _error(e.description or e.name, e.code or 500)
         logging.getLogger("license_service").exception("unhandled error")
         return _error("internal server error", 500)
 

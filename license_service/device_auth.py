@@ -102,7 +102,6 @@ def verify_proof(conn, *, app_name, machine_code, machine_hash, action, challeng
 def device_key(conn, app_name, machine_hash):
     return conn.execute(
         """SELECT public_key, revoked FROM device_credentials
-           WHERE app_name=? AND machine_code_hash=?
-           ORDER BY updated_at DESC LIMIT 1""",
+           WHERE app_name=? AND machine_code_hash=?""",
         (app_name, machine_hash),
     ).fetchone()
