@@ -224,10 +224,14 @@
     }
     function fmtMachine(mc) { return (mc.match(/.{1,8}/g) || [mc]).join(' '); }
     // 时间显示：存储为 UTC，此处转北京时间（Asia/Shanghai）——标准做法「存 UTC、显示本地」
+    // 注意 last_seen 形如 "YYYY-MM-DD HH:MM:SS"（无时区标记），须显式补 Z 按 UTC 解析，
+    // 否则 new Date() 会按浏览器本地时区误解析、+8h 变双重转换。
     function fmtSeen(ts) {
         if (!ts) return '';
-        const d = new Date(ts);
-        if (isNaN(d)) return ts.replace('T', ' ').slice(0, 16);
+        let s = String(ts).trim().replace(' ', 'T');
+        if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+        const d = new Date(s);
+        if (isNaN(d)) return String(ts).slice(0, 16);
         const b = new Date(d.getTime() + 8 * 3600e3); // 北京 = UTC+8（无夏令时）
         const p = n => String(n).padStart(2, '0');
         return `${b.getUTCFullYear()}-${p(b.getUTCMonth() + 1)}-${p(b.getUTCDate())} ${p(b.getUTCHours())}:${p(b.getUTCMinutes())}`;
