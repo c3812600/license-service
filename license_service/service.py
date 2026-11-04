@@ -357,7 +357,7 @@ def license_stats(app):
         overview = dict(conn.execute(
             """SELECT COUNT(*) AS total,
                       COALESCE(SUM(CASE WHEN status='active' AND expires_at>=? THEN 1 ELSE 0 END), 0) AS active,
-                      COALESCE(SUM(CASE WHEN expires_at<? THEN 1 ELSE 0 END), 0) AS expired,
+                      COALESCE(SUM(CASE WHEN status='active' AND expires_at<? THEN 1 ELSE 0 END), 0) AS expired,
                       COALESCE(SUM(CASE WHEN status='active' AND expires_at BETWEEN ? AND ? THEN 1 ELSE 0 END), 0) AS expiring_30d,
                       COUNT(DISTINCT machine_code_hash) AS unique_machines
                FROM license_issues""",
@@ -584,23 +584,24 @@ def list_devices(app, *, q="", app_name=""):
     """设备列表（模糊搜索机器码/客户/备注）+ 每设备最新有效授权 + 首页统计"""
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
+        now_date = _today()
         rows = conn.execute(
-            "SELECT * FROM device_registry ORDER BY last_seen DESC"
+            """
+            SELECT r.app_name, r.machine_code, r.customer_name, r.notes,
+                   r.first_seen, r.last_seen,
+                   (SELECT l.expires_at FROM license_issues l
+                     WHERE l.app_name=r.app_name AND l.machine_code_hash=r.machine_code_hash
+                       AND l.status='active'
+                     ORDER BY l.expires_at DESC, l.id DESC LIMIT 1) AS expires_at
+            FROM device_registry r
+            WHERE (? = '' OR r.app_name = ?)
+            ORDER BY r.last_seen DESC
+            """,
+            [app_name, app_name],
         ).fetchall()
         out = []
-        now_date = _today()
         for row in rows:
-            if app_name and row["app_name"] != app_name:
-                continue
-            latest = conn.execute(
-                """
-                SELECT expires_at, status FROM license_issues
-                WHERE app_name = ? AND machine_code_hash = ? AND status = 'active'
-                ORDER BY expires_at DESC LIMIT 1
-                """,
-                [row["app_name"], row["machine_code_hash"]],
-            ).fetchone()
-            expires = latest["expires_at"] if latest else None
+            expires = row["expires_at"]
             if expires:
                 try:
                     expired = dt.datetime.strptime(expires[:10], "%Y-%m-%d").date() < now_date
@@ -619,12 +620,7 @@ def list_devices(app, *, q="", app_name=""):
                 "expires_at": expires,
                 "license_state": state,
             })
-        # 模糊搜索（机器码/客户/备注，大小写不敏感）
-        if q:
-            ql = q.lower()
-            out = [d for d in out if ql in d["machine_code"].lower()
-                   or ql in d["customer_name"].lower()
-                   or ql in d["notes"].lower()]
+        # 统计独立于搜索条件（不随 q 变），基于 app_name 过滤后的全集
         today = now_date
         soon = today + dt.timedelta(days=30)
         summary = {
@@ -635,6 +631,12 @@ def list_devices(app, *, q="", app_name=""):
                                  and d["expires_at"] and today.isoformat() <= d["expires_at"][:10] <= soon.isoformat()),
             "expired": sum(1 for d in out if d["license_state"] == "expired"),
         }
+        # 模糊搜索（机器码/客户/备注，大小写不敏感）——仅影响展示，不影响统计
+        if q:
+            ql = q.lower()
+            out = [d for d in out if ql in d["machine_code"].lower()
+                   or ql in d["customer_name"].lower()
+                   or ql in d["notes"].lower()]
         return {"devices": out, "summary": summary}
     finally:
         conn.close()

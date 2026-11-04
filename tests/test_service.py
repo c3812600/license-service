@@ -488,6 +488,52 @@ class LicenseServiceTests(unittest.TestCase):
         self.assertEqual(picked.status_code, 200)
         self.assertEqual(picked.json["data"]["license_key"], paid.json["data"]["license_key"])
 
+    def test_admin_forget_then_retry_trial(self):
+        machine = "F" * 64
+        self.assertEqual(self.apply_trial(machine=machine).status_code, 200)
+        res = self.client.post(
+            "/api/v1/devices/forget", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertGreaterEqual(res.json["data"]["removed_issues"], 1)
+        # 记录清空后，机器可当"全新"重领试用
+        self.assertEqual(self.apply_trial(machine=machine).status_code, 200)
+
+    def test_admin_list_devices_and_summary_stable_under_search(self):
+        machine = "1" * 64
+        self.assertEqual(self.apply_trial(machine=machine).status_code, 200)
+        full = self.client.get("/api/v1/devices", headers={"X-Admin-Token": "test-admin"})
+        self.assertEqual(full.status_code, 200)
+        self.assertEqual(full.json["data"]["summary"]["total"], 1)
+        # 搜索只影响展示，不影响统计（summary 独立于 q）
+        filtered = self.client.get("/api/v1/devices?q=zzz_no_match", headers={"X-Admin-Token": "test-admin"})
+        self.assertEqual(filtered.json["data"]["devices"], [])
+        self.assertEqual(filtered.json["data"]["summary"]["total"], 1)
+
+    def test_admin_update_device_meta(self):
+        machine = "2" * 64
+        self.assertEqual(self.apply_trial(machine=machine).status_code, 200)
+        res = self.client.patch(
+            "/api/v1/devices", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "customer_name": "ACME", "notes": "测试备注"},
+        )
+        self.assertEqual(res.status_code, 200)
+        lst = self.client.get("/api/v1/devices", headers={"X-Admin-Token": "test-admin"})
+        dev = [d for d in lst.json["data"]["devices"] if d["machine_code"] == machine][0]
+        self.assertEqual(dev["customer_name"], "ACME")
+        self.assertEqual(dev["notes"], "测试备注")
+
+    def test_admin_active_key(self):
+        machine = "3" * 64
+        issued = self.apply_trial(machine=machine).json["data"]
+        res = self.client.get(
+            "/api/v1/licenses/active_key?app_name=ControlCommand&machine_code=" + machine,
+            headers={"X-Admin-Token": "test-admin"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json["data"]["license_key"], issued["license_key"])
+
 
 if __name__ == "__main__":
     unittest.main()

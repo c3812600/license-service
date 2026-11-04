@@ -74,7 +74,7 @@ def main():
     get.env_file = PROJECT + "/.env"
     get.env_list = []
     get.framework = "flask"
-    get.project_cmd = f"{VENV}/bin/python -u {PROJECT}/app.py"
+    get.project_cmd = f"{VENV}/bin/gunicorn -w 2 -b 0.0.0.0:{PORT} --chdir {PROJECT} app:app"
     get.initialize = ""
     get.call_app = "app"
 
