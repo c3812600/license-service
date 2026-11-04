@@ -34,6 +34,7 @@ class LicenseServiceTests(unittest.TestCase):
             PRIVATE_KEY_PATH=str(self.private),
             PUBLIC_KEY_PATH=str(self.public),
             TRIAL_DAYS=30,
+            RATE_LIMIT_ENABLED=False,
             TRIAL_DAYS_MAP={"ControlCommand": 90},
             ALLOWED_APP_NAMES=("ControlCommand",),
         )
@@ -457,6 +458,35 @@ class LicenseServiceTests(unittest.TestCase):
             "HNhvGmg8ez2IrCEP2uypAGDkMHOmGsribExv25ujZSZ5zRIxKdfLucahMQRhufmCdjcWFRJxd1Ljvu2KKUIeAw",
         )
         self.assertEqual(len(decode_public_key(public_key)), 32)
+
+    def test_paid_machine_cannot_self_service_trial(self):
+        # P0-2: 已有付费授权的机器不能自助领试用（防止试用顶替付费）
+        machine = "E" * 64
+        paid = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": "2030-01-01"},
+        )
+        self.assertEqual(paid.status_code, 200)
+        enroll = self.device_proof("register", machine=machine)
+        self.assertEqual(
+            self.client.post("/api/v1/devices/register", json=enroll, headers={"X-Admin-Token": "test-admin"}).status_code,
+            200,
+        )
+        self.assertEqual(self.apply_trial(machine=machine).status_code, 403)
+
+    def test_latest_prefers_paid_over_trial(self):
+        # P0-3: latest 取数按 license_type 优先级，试用不得顶掉付费
+        machine = "C" * 64
+        trial = self.apply_trial(machine=machine, days=30)
+        self.assertEqual(trial.status_code, 200)
+        paid = self.client.post(
+            "/api/v1/licenses/renew", headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": "2026-11-20"},
+        )
+        self.assertEqual(paid.status_code, 200)
+        picked = self.client.post("/api/v1/licenses/latest", json=self.device_proof("latest", machine=machine))
+        self.assertEqual(picked.status_code, 200)
+        self.assertEqual(picked.json["data"]["license_key"], paid.json["data"]["license_key"])
 
 
 if __name__ == "__main__":

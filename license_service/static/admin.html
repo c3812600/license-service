@@ -99,7 +99,7 @@
 <body>
     <div class="token-bar">
         <label>Admin Token:</label>
-        <input type="password" id="admin-token" placeholder="粘贴 X-Admin-Token（保存在本浏览器）" />
+        <input type="password" id="admin-token" placeholder="粘贴 X-Admin-Token（仅本标签页，关闭即失效）" />
         <button class="btn btn-sm" onclick="saveToken()">保存</button>
         <span class="status" id="token-status">未验证</span>
     </div>
@@ -206,10 +206,10 @@
     const API_BASE = '';
     let currentDevice = null;
 
-    function getToken() { return localStorage.getItem('admin_token') || ''; }
+    function getToken() { return sessionStorage.getItem('admin_token') || ''; }
     function saveToken() {
         const v = document.getElementById('admin-token').value.trim();
-        localStorage.setItem('admin_token', v);
+        sessionStorage.setItem('admin_token', v);
         const st = document.getElementById('token-status');
         st.textContent = v ? '已保存' : '未验证';
         st.className = 'status' + (v ? ' active' : '');
@@ -236,7 +236,7 @@
         const p = n => String(n).padStart(2, '0');
         return `${b.getUTCFullYear()}-${p(b.getUTCMonth() + 1)}-${p(b.getUTCDate())} ${p(b.getUTCHours())}:${p(b.getUTCMinutes())}`;
     }
-    function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+    function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
     function badge(d) {

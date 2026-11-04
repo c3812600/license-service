@@ -14,7 +14,13 @@ from .db import connect_db, execute, fetch_all
 
 
 def _utc_now():
-    return dt.datetime.utcnow().replace(microsecond=0)
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
+def _today():
+    """到期判据统一用 UTC 日历日（与签发口径一致，消除 8 小时边界双标）。
+    客户端按本地日历日比较到期，边界残差是已知产品取舍，见 docs。"""
+    return dt.datetime.now(dt.timezone.utc).date()
 
 
 def _parse_date(date_text):
@@ -172,10 +178,19 @@ def issue_trial_license(
                 raise RuntimeError("device enrollment requires admin approval")
             conn.execute(
                 """INSERT INTO device_credentials(app_name, machine_code_hash, public_key)
-                   VALUES(?,?,?)""",
+                   VALUES(?,?,?)
+                   ON CONFLICT(app_name, machine_code_hash)
+                   DO UPDATE SET public_key=excluded.public_key, revoked=0, updated_at=CURRENT_TIMESTAMP""",
                 (app_name, machine_hash, public_key),
             )
-        today = dt.datetime.now(dt.timezone.utc).date()
+        # P0-2: 已有付费/离线/续期授权的机器不得自助领试用（含已登记设备），防试用顶替付费
+        non_trial = conn.execute(
+            "SELECT 1 FROM license_issues WHERE app_name=? AND machine_code_hash=? AND channel!='trial_auto' LIMIT 1",
+            (app_name, machine_hash),
+        ).fetchone()
+        if non_trial:
+            raise PermissionError("machine already has paid/offline license; self-service trial not allowed")
+        today = _today()
         if existing:
             first_date = dt.datetime.fromisoformat(existing["issued_at"].replace("Z", "")).date()
             expires_date = _parse_date(existing["expires_at"])
@@ -218,6 +233,7 @@ def renew_license(
 ):
     validate_app_name(app, app_name)
     _parse_date(expires_at)
+    machine_code = check_machine_code(machine_code)
     if supersede:
         # 客户端取"最长有效期"的 active 授权——缩短有效期必须先吊销旧记录，否则新记录永不生效
         machine_code = check_machine_code(machine_code)
@@ -235,7 +251,15 @@ def renew_license(
                 detail="revoked %d active license(s) before renew to %s" % (cur.rowcount, expires_at),
                 conn=conn,
             )
+            # P0-3: 吊销+签发同一事务，签发失败整体回滚，避免设备被清零
+            result = _issue_record(
+                app, app_name=app_name, machine_code=machine_code,
+                license_type=license_type, expires_at=expires_at, channel="admin_renew",
+                customer_name=customer_name, notes=notes, previous_issue_id=previous_issue_id,
+                created_by=created_by, client_ip=client_ip, user_agent=user_agent, conn=conn,
+            )
             conn.commit()
+            return result
         except Exception:
             conn.rollback()
             raise
@@ -272,6 +296,7 @@ def issue_offline_license(
 ):
     validate_app_name(app, app_name)
     _parse_date(expires_at)
+    machine_code = check_machine_code(machine_code)
     return _issue_record(
         app,
         app_name=app_name,
@@ -315,15 +340,15 @@ def fetch_active_license_key(app, *, app_name, machine_code):
         SELECT issue_id, license_token AS license_key, license_type, channel, issued_at, expires_at
         FROM license_issues
         WHERE app_name=? AND machine_code_hash=? AND status='active' AND expires_at>=?
-        ORDER BY expires_at DESC, id DESC LIMIT 1
+        ORDER BY CASE WHEN license_type='trial' THEN 1 ELSE 0 END, expires_at DESC, id DESC LIMIT 1
         """,
-        [app_name, machine_code_hash, dt.date.today().isoformat()],
+        [app_name, machine_code_hash, _today().isoformat()],
     )
     return dict(rows[0]) if rows else None
 
 
 def license_stats(app):
-    current_date = dt.date.today()
+    current_date = _today()
     today = current_date.isoformat()
     cutoff = (current_date + dt.timedelta(days=30)).isoformat()
     conn = connect_db(app.config["DATABASE_PATH"])
@@ -415,14 +440,15 @@ def fetch_latest_license(app, *, app_name, machine_code, challenge, signature):
         try:
             touch_device(app, app_name=app_name, machine_code=machine_code, conn=conn)
         except Exception:
-            pass
+            import logging
+            logging.getLogger("license_service").warning("touch_device(last_seen) failed", exc_info=True)
         row = conn.execute(
             """SELECT license_token AS license_key, expires_at, license_type,
                       channel, issue_id, issued_at FROM license_issues
                WHERE app_name=? AND machine_code_hash=? AND status='active'
                  AND expires_at>=? AND channel!='offline_manual'
-               ORDER BY expires_at DESC, id DESC LIMIT 1""",
-            (app_name, machine_hash, dt.datetime.now(dt.timezone.utc).date().isoformat()),
+               ORDER BY CASE WHEN license_type='trial' THEN 1 ELSE 0 END, expires_at DESC, id DESC LIMIT 1""",
+            (app_name, machine_hash, _today().isoformat()),
         ).fetchone()
         write_audit_log(
             app, action="fetch_latest", actor="device", app_name=app_name,
@@ -562,7 +588,7 @@ def list_devices(app, *, q="", app_name=""):
             "SELECT * FROM device_registry ORDER BY last_seen DESC"
         ).fetchall()
         out = []
-        now_date = dt.datetime.now(dt.timezone.utc).date()
+        now_date = _today()
         for row in rows:
             if app_name and row["app_name"] != app_name:
                 continue
@@ -633,6 +659,10 @@ def forget_machine(app, *, app_name, machine_code):
         )
         chall = conn.execute(
             "DELETE FROM device_challenges WHERE app_name=? AND machine_code_hash=?",
+            [app_name, machine_hash],
+        )
+        conn.execute(
+            "DELETE FROM device_registry WHERE app_name=? AND machine_code_hash=?",
             [app_name, machine_hash],
         )
         write_audit_log(

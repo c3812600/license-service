@@ -39,7 +39,8 @@ class Config:
     SECRET_KEY = os.environ.get("LICENSE_SERVICE_SECRET_KEY") or "change-me"
     ADMIN_TOKEN = os.environ.get("LICENSE_SERVICE_ADMIN_TOKEN") or ""
     MACHINE_CODE_SALT = os.environ.get("LICENSE_SERVICE_MACHINE_CODE_SALT") or "change-me"
-    TRIAL_DAYS = int(os.environ.get("LICENSE_SERVICE_TRIAL_DAYS") or "365")
+    TRIAL_DAYS = int(os.environ.get("LICENSE_SERVICE_TRIAL_DAYS") or "30")
+    RATE_LIMIT_ENABLED = (os.environ.get("LICENSE_SERVICE_RATE_LIMIT", "1") == "1")
     TRIAL_DAYS_MAP = _trial_days_map()
     ALLOWED_APP_NAMES = _allowed_app_names()
     DATABASE_PATH = _resolve_path(

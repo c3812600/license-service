@@ -82,6 +82,9 @@ def init_db(db_path):
             """
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_registry_last_seen ON device_registry(last_seen)"
+        )
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS device_credentials (
                 app_name TEXT NOT NULL,
@@ -108,15 +111,6 @@ def init_db(db_path):
             "CREATE INDEX IF NOT EXISTS idx_device_challenges_expiry ON device_challenges(expires_at)"
         )
         conn.commit()
-    finally:
-        conn.close()
-
-
-def fetch_one(db_path, query, args=()):
-    conn = connect_db(db_path)
-    try:
-        cursor = conn.execute(query, args)
-        return cursor.fetchone()
     finally:
         conn.close()
 

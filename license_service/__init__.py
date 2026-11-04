@@ -1,7 +1,12 @@
 import hmac
+import logging
+import threading
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
+from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import Config
 from .crypto import ensure_keypair
@@ -30,9 +35,34 @@ def _require_admin_token(app):
     return None
 
 
+_RATE_LOCK = threading.Lock()
+_RATE_HITS = {}
+# 公开接口限流：路径 -> (次数, 窗口秒)。防御恶意刷挑战/试用（代理限流之外的兜底）。
+_RATE_LIMITS = {
+    "/api/v1/devices/challenge": (30, 60),
+    "/api/v1/trial/apply": (5, 60),
+    "/api/v1/licenses/latest": (10, 60),
+}
+
+
+def _rate_limited(ip, path, limit, window):
+    now = time.time()
+    key = (ip, path)
+    with _RATE_LOCK:
+        hits = [t for t in _RATE_HITS.get(key, []) if now - t < window]
+        if len(hits) >= limit:
+            _RATE_HITS[key] = hits
+            return True
+        hits.append(now)
+        _RATE_HITS[key] = hits
+    return False
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+    # 真实客户端 IP（审计溯源）：仅信任一层反向代理
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
     static_dir = Path(__file__).resolve().parent / "static"
 
@@ -59,6 +89,23 @@ def create_app():
         if request.path.startswith("/api/v1/") or request.path.startswith("/admin"):
             response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.before_request
+    def _rate_limit():
+        if not app.config.get("RATE_LIMIT_ENABLED", True):
+            return None
+        lim = _RATE_LIMITS.get(request.path)
+        if lim and request.method == "POST":
+            if _rate_limited(request.remote_addr or "", request.path, *lim):
+                return _error("too many requests", 429)
+        return None
+
+    @app.errorhandler(Exception)
+    def _unhandled(e):
+        if isinstance(e, HTTPException):
+            return e
+        logging.getLogger("license_service").exception("unhandled error")
+        return _error("internal server error", 500)
 
     @app.get("/api/v1/health")
     def health():
