@@ -411,6 +411,11 @@ def fetch_latest_license(app, *, app_name, machine_code, challenge, signature):
             action="latest", challenge=challenge, signature=signature,
             public_key=registered["public_key"],
         )
+        # 客户端每次授权检查都刷新「最近出现」（检查即打卡；档案失败不阻断取授权）
+        try:
+            touch_device(app, app_name=app_name, machine_code=machine_code, conn=conn)
+        except Exception:
+            pass
         row = conn.execute(
             """SELECT license_token AS license_key, expires_at, license_type,
                       channel, issue_id, issued_at FROM license_issues
