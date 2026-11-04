@@ -44,7 +44,13 @@
 
         .table-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th, td { padding: 9px 11px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        /* 备注列：截短到固定宽，隐藏文字可在单元格内横向滚动/拖选，悬停有全文提示 */
+        th.notes, td.notes { max-width: 176px; }
+        td.notes .scroll-x { display: block; max-width: 176px; overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: thin; cursor: text; }
+        td.notes .scroll-x::-webkit-scrollbar { height: 4px; }
+        td.notes .scroll-x::-webkit-scrollbar-thumb { background: #444a5e; border-radius: 2px; }
+        td.notes .scroll-x::-webkit-scrollbar-thumb:hover { background: var(--accent); }
         th { color: var(--text-dim); font-weight: 500; font-size: 12px; background: #161923; }
         /* 操作列右侧固定：横向滚动时按钮永不被裁掉 */
         th.ops, td.ops { position: sticky; right: 0; box-shadow: -8px 0 10px -8px rgba(0,0,0,.55); }
@@ -123,7 +129,7 @@
             <table>
                 <thead>
                     <tr>
-                        <th>应用</th><th>机器码（点击复制）</th><th>客户名称</th><th>备注</th>
+                        <th>应用</th><th>机器码（点击复制）</th><th>客户名称</th><th class="notes">备注</th>
                         <th>到期日期</th><th>状态</th><th>最近出现</th><th class="ops">操作</th>
                     </tr>
                 </thead>
@@ -254,7 +260,7 @@
                 <td>${esc(d.app_name)}</td>
                 <td><span class="mc" title="点击复制完整机器码" onclick="copyMachine(this)" data-mc="${esc(d.machine_code)}">${fmtMachine(d.machine_code.slice(0,16))}…${esc(d.machine_code.slice(-4))}</span></td>
                 <td>${esc(d.customer_name) || '<span class="dim">—</span>'}</td>
-                <td>${esc(d.notes) || '<span class="dim">—</span>'}</td>
+                <td class="notes">${d.notes ? `<span class="scroll-x" title="${esc(d.notes)}">${esc(d.notes)}</span>` : '<span class="dim">—</span>'}</td>
                 <td>${d.expires_at ? esc(d.expires_at.slice(0,10)) : '<span class="dim">—</span>'}</td>
                 <td>${badge(d)}</td>
                 <td class="dim">${fmtSeen(d.last_seen)}</td>
