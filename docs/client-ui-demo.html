@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>授权中心 · 演示</title>
+<style>
+  /* ========== 主题变量 ==========
+     基础 token —— --bg / --card / --border / --text / --text-dim / --accent /
+     --accent-hover / --success / --warn / --danger —— 命名与服务端
+     license_service/static/admin.html 完全一致，两端共享组件时可直接复用。
+     客户端扩展 token（管理端暂无对应项）：--radius --mc-bg --mc-code-bg
+     --expire-bg --expire-border --status-bg --btn-hover --btn-hover-border
+     --mask --shadow --log-bg。 */
+  :root, [data-theme="light"]{
+    --bg:#f5f6f8; --card:#fff; --border:#e3e6eb; --text:#1f2329;
+    --text-dim:#6b7280; --accent:#2563eb; --accent-hover:#1d4ed8;
+    --success:#16a34a; --warn:#d97706; --danger:#dc2626;
+    --radius:12px;
+    --mc-bg:#f7f9fc; --mc-code-bg:#fff;
+    --expire-bg:#f8faff; --expire-border:#dbe4ff;
+    --status-bg:#fafbfc;
+    --btn-hover:#fafbff; --btn-hover-border:#c9d2e0;
+    --mask:rgba(15,18,25,.45);
+    --shadow:0 1px 2px rgba(0,0,0,.04);
+    --log-bg:#fafbfc;
+  }
+  [data-theme="dark"]{
+    --bg:#0f1218; --card:#171b23; --border:#2a303b; --text:#e6e9ef;
+    --text-dim:#8b93a1; --accent:#3b82f6; --accent-hover:#2563eb;
+    --success:#22c55e; --warn:#f59e0b; --danger:#ef4444;
+    --mc-bg:#1c212b; --mc-code-bg:#11151c;
+    --expire-bg:#1a2233; --expire-border:#2b3a5c;
+    --status-bg:#1a1f28;
+    --btn-hover:#1e242e; --btn-hover-border:#3a4250;
+    --mask:rgba(0,0,0,.6);
+    --shadow:0 1px 2px rgba(0,0,0,.3);
+    --log-bg:#11151c;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg); color:var(--text); min-height:100vh;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+    transition:background .2s, color .2s;
+  }
+  .app{width:100%;max-width:520px}
+
+  /* ========== 品牌栏 ========== */
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:0 4px}
+  .logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#2563eb,#7c3aed);display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;flex:none}
+  .brand-txt{display:flex;flex-direction:column;justify-content:center;gap:2px;min-width:0}
+  .brand h1{font-size:15px;font-weight:600;line-height:1.15;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .brand-sub{font-size:11px;color:var(--text-dim);line-height:1.1;letter-spacing:.3px}
+  .brand .spacer{margin-left:auto}
+
+  /* 服务器连接状态图标 */
+  .srv{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);padding:4px 10px;border:1px solid var(--border);border-radius:999px;background:var(--card)}
+  .srv .lamp{width:8px;height:8px;border-radius:50%;background:var(--text-dim);position:relative;flex:none}
+  .srv .lamp.ok{background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent)}
+  .srv .lamp.err{background:var(--danger);box-shadow:0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent)}
+  .srv .lamp.connecting{background:var(--warn);animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .srv .txt{color:var(--text-dim)}
+  .srv .txt.ok{color:var(--success)} .srv .txt.err{color:var(--danger)} .srv .txt.connecting{color:var(--warn)}
+  .srv .retry{border:none;background:none;color:var(--accent);cursor:pointer;font-size:12px;padding:0 0 0 2px;display:none}
+  .srv.failed .retry{display:inline}
+
+  /* 主题切换 */
+  .theme-btn{
+    width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:var(--card);
+    cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;
+    color:var(--text-dim);transition:.15s;flex:none;
+  }
+  .theme-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+  /* ========== 卡片 ========== */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;transition:background .2s,border-color .2s}
+
+  /* 状态行 */
+  .status{display:flex;align-items:center;gap:8px;padding:12px 16px;font-size:13px;border-bottom:1px solid var(--border);background:var(--status-bg)}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .dot.ok{background:var(--success)} .dot.warn{background:var(--warn)} .dot.err{background:var(--danger)}
+  .status .msg{color:var(--text-dim)} .status .msg.ok{color:var(--success)} .status .msg.warn{color:var(--warn)} .status .msg.err{color:var(--danger)}
+  .status .right{margin-left:auto;color:var(--text-dim);font-size:12px}
+
+  /* 主区 */
+  .main{padding:20px 16px}
+
+  /* 1. 机器码 */
+  .mc-main{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--mc-bg);border:1px solid var(--border);border-radius:10px;margin-bottom:14px}
+  .mc-main .label{font-size:12px;color:var(--text-dim);flex:none}
+  .mc-wrap{position:relative;flex:1;min-width:0;display:flex}
+  /* 右侧渐隐提示「还有内容」：溢出时显示，滚到末尾自动消失 */
+  .mc-wrap::after{content:"";position:absolute;top:1px;right:1px;bottom:1px;width:32px;border-radius:0 6px 6px 0;pointer-events:none;background:linear-gradient(to right,transparent,var(--mc-code-bg));opacity:0;transition:opacity .15s}
+  .mc-wrap.ovf::after{opacity:1}
+  .mc-wrap.ovf.end::after{opacity:0}
+  .mc-main code{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:var(--mc-code-bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;letter-spacing:.5px;color:var(--text);cursor:text;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+  .mc-main code::-webkit-scrollbar{height:4px}
+  .mc-main code::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+  .mc-main code:hover::-webkit-scrollbar-thumb{background:var(--text-dim)}
+  .mc-main .copy{border:1px solid var(--border);background:var(--card);border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;color:var(--text-dim);flex:none;transition:.15s}
+  .mc-main .copy:hover{border-color:var(--accent);color:var(--accent)}
+  .mc-main .copy.done{border-color:var(--success);color:var(--success)}
+
+  /* 2. 到期时间 */
+  .expire{display:flex;align-items:baseline;gap:10px;padding:14px 16px;background:var(--expire-bg);border:1px solid var(--expire-border);border-radius:10px;margin-bottom:14px}
+  .expire .label{font-size:13px;color:var(--text-dim)}
+  .expire .date{font-size:20px;font-weight:600;letter-spacing:.3px}
+  .expire .badge{margin-left:auto;font-size:12px;padding:2px 8px;border-radius:999px;background:color-mix(in srgb, var(--success) 14%, transparent);color:var(--success)}
+  .expire .badge.warn{background:color-mix(in srgb, var(--warn) 16%, transparent);color:var(--warn)}
+  .expire .badge.err{background:color-mix(in srgb, var(--danger) 16%, transparent);color:var(--danger)}
+
+  /* 3. 离线导入 */
+  .actions{display:grid;grid-template-columns:1fr;gap:10px}
+  .btn{width:100%;padding:12px 16px;border-radius:10px;border:1px solid var(--border);background:var(--card);font-size:14px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:.15s;color:var(--text)}
+  .btn:hover{border-color:var(--btn-hover-border);background:var(--btn-hover)}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn-primary:hover{background:var(--accent-hover)}
+
+  /* ========== 弹窗 ========== */
+  .mask{position:fixed;inset:0;background:var(--mask);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}
+  .mask.show{display:flex}
+  .modal{width:100%;max-width:480px;background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;animation:pop .18s ease}
+  @keyframes pop{from{transform:translateY(8px);opacity:.6}to{transform:none;opacity:1}}
+  .modal-h{display:flex;align-items:center;padding:16px 18px;border-bottom:1px solid var(--border)}
+  .modal-h h2{font-size:15px;font-weight:600}
+  .modal-h .x{margin-left:auto;width:28px;height:28px;border:none;background:transparent;border-radius:8px;cursor:pointer;font-size:16px;color:var(--text-dim)}
+  .modal-h .x:hover{background:var(--btn-hover)}
+  .modal-b{padding:18px}
+
+  .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+  .field label{font-size:13px;font-weight:500}
+  .field textarea{width:100%;min-height:110px;resize:vertical;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px;font-family:ui-monospace,monospace;line-height:1.5;outline:none;transition:.15s;background:var(--mc-code-bg);color:var(--text)}
+  .field textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent)}
+  .field .hint{font-size:12px;color:var(--text-dim);line-height:1.5}
+
+  .modal-foot{display:flex;gap:10px;align-items:center;padding:0 18px 18px}
+  .modal-foot .link{margin-right:auto;font-size:12px;color:var(--accent);cursor:pointer;text-decoration:none;border:none;background:none;padding:0}
+  .modal-foot .link:hover{text-decoration:underline}
+  .modal-foot .btn{width:auto;flex:1}
+
+  /* ========== Toast ========== */
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(12px);background:#1f2329;color:#fff;font-size:13px;padding:9px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:.2s;z-index:80}
+  [data-theme="dark"] .toast{background:#e6e9ef;color:#11151c}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.err{background:var(--danger);color:#fff} .toast.ok{background:var(--success);color:#fff}
+
+  /* ========== 演示区 ========== */
+  .demo{margin-top:16px;padding:12px 14px;border:1px dashed var(--border);border-radius:12px;background:var(--card);transition:background .2s,border-color .2s}
+  .demo h3{font-size:12px;color:var(--text-dim);font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+  .demo h3::before{content:"";width:6px;height:6px;border-radius:50%;background:#a78bfa}
+  .demo-row{display:flex;flex-wrap:wrap;gap:8px}
+  .demo-row .btn{width:auto;flex:1;min-width:140px;padding:8px 12px;font-size:12px;border-radius:8px}
+  .log{margin-top:10px;font-family:ui-monospace,monospace;font-size:11px;line-height:1.7;color:var(--text-dim);max-height:150px;overflow:auto;background:var(--log-bg);border-radius:8px;padding:8px 10px;border:1px solid var(--border)}
+  .log div{white-space:pre-wrap}
+  .log .t{color:#9aa3af} .log .s{color:var(--success)} .log .e{color:var(--danger)} .log .w{color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="brand">
+    <div class="logo" id="appLogo">W</div>
+    <div class="brand-txt">
+      <h1 id="appName" title="当前软件">WinPilot</h1>
+      <span class="brand-sub">授权中心</span>
+    </div>
+    <span class="spacer"></span>
+    <!-- 授权服务器连接状态图标 -->
+    <div class="srv connecting" id="srv" title="授权服务器连接状态">
+      <span class="lamp connecting" id="srvLamp"></span>
+      <span class="txt connecting" id="srvTxt">连接中…</span>
+      <button class="retry" id="srvRetry">重试</button>
+    </div>
+    <!-- 主题切换 -->
+    <button class="theme-btn" id="themeBtn" title="切换深色/浅色">🌙</button>
+  </div>
+
+  <div class="card">
+    <div class="status" id="statusBar">
+      <span class="dot ok" id="statusDot"></span>
+      <span class="msg ok" id="statusMsg">授权正常</span>
+      <span class="right" id="statusRight"></span>
+    </div>
+
+    <div class="main">
+      <!-- 1. 机器码 -->
+      <div class="mc-main">
+        <span class="label">机器码</span>
+        <div class="mc-wrap">
+          <code id="machineCodeMain" title="机器码：超出宽度可横向滚动，右侧按钮一键复制">2B0A6BB3DFCE629E9C4D3CA289F0E85BCCC27E09F4E7470D1F9E92C74F59EA03</code>
+        </div>
+        <button class="copy" id="btnCopyMain">复制</button>
+      </div>
+
+      <!-- 2. 到期时间 -->
+      <div class="expire" id="expireBox">
+        <span class="label">到期时间</span>
+        <span class="date" id="expireDate">2026-12-31</span>
+        <span class="badge" id="expireBadge">生效中</span>
+      </div>
+
+      <!-- 3. 离线导入 -->
+      <div class="actions">
+        <button class="btn btn-primary" id="btnImport">离线导入授权</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 演示区 -->
+  <div class="demo">
+    <h3>P0 自愈链路演示（仅演示用）</h3>
+    <div class="demo-row">
+      <button class="btn" id="sim403">模拟 403 invalid device proof</button>
+      <button class="btn" id="simExpire">模拟授权即将到期</button>
+      <button class="btn" id="simUpdate">模拟服务端有新授权</button>
+      <button class="btn" id="simReset">重置状态</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<!-- 离线导入弹窗 -->
+<div class="mask" id="mask">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-h">
+      <h2 id="modalTitle">离线导入授权</h2>
+      <button class="x" id="btnClose" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="field">
+        <label for="licenseInput">授权码</label>
+        <textarea id="licenseInput" placeholder="粘贴授权码 / 导入授权文件内容…"></textarea>
+        <span class="hint">离线机：把主界面机器码发给管理员换取授权码，粘贴到此处完成导入。</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="link" id="btnExport">激活遇到问题？导出设备信息</button>
+      <button class="btn" id="btnCancel">取消</button>
+      <button class="btn btn-primary" id="btnSubmit">导入</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  const $ = s => document.querySelector(s);
+  // 当前软件名：演示可用 ?app=E-Player 覆盖；真实客户端由构建时注入
+  const qs = new URLSearchParams(location.search);
+  const state = {
+    appName: (qs.get('app') || 'WinPilot').trim() || 'WinPilot',
+    expire: '2026-12-31',
+    authorized: true,
+    selfHealed: 0,
+    reboundToday: false,
+    serverVersion: 1,   // 本地已知授权版本
+    serverOnline: false
+  };
+
+  const el = {
+    appName: $('#appName'), appLogo: $('#appLogo'),
+    dot: $('#statusDot'), msg: $('#statusMsg'), right: $('#statusRight'),
+    date: $('#expireDate'), badge: $('#expireBadge'),
+    mask: $('#mask'), log: $('#log'), toast: $('#toast'),
+    machineCodeMain: $('#machineCodeMain'), copyMain: $('#btnCopyMain'),
+    license: $('#licenseInput'),
+    srv: $('#srv'), srvLamp: $('#srvLamp'), srvTxt: $('#srvTxt'), srvRetry: $('#srvRetry'),
+    themeBtn: $('#themeBtn')
+  };
+
+  /* ========== 主题 ========== */
+  function applyTheme(theme){
+    document.documentElement.setAttribute('data-theme', theme);
+    el.themeBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
+    try { localStorage.setItem('auth-theme', theme); } catch {}
+  }
+  (function initTheme(){
+    let saved = null;
+    try { saved = localStorage.getItem('auth-theme'); } catch {}
+    if (!saved) saved = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    applyTheme(saved);
+  })();
+  el.themeBtn.onclick = function(){
+    const cur = document.documentElement.getAttribute('data-theme');
+    applyTheme(cur === 'dark' ? 'light' : 'dark');
+  };
+
+  /* ========== 当前软件名 ========== */
+  function renderApp(){
+    const name = state.appName;
+    el.appName.textContent = name;
+    el.appName.title = name;
+    el.appLogo.textContent = (name.charAt(0) || 'A').toUpperCase();
+    el.appLogo.title = name;
+    document.title = name + ' · 授权中心';
+  }
+  renderApp();
+
+  /* ========== 机器码滚动提示（溢出时右侧渐隐，滚到末尾消失） ========== */
+  function syncCodeFade(){
+    const scroller = el.machineCodeMain;
+    const wrap = scroller.parentElement;
+    if (!wrap || !wrap.classList.contains('mc-wrap')) return;
+    const overflow = scroller.scrollWidth > scroller.clientWidth + 1;
+    const atEnd = scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 1;
+    wrap.classList.toggle('ovf', overflow);
+    wrap.classList.toggle('end', atEnd);
+  }
+  el.machineCodeMain.addEventListener('scroll', syncCodeFade);
+  window.addEventListener('resize', syncCodeFade);
+  window.addEventListener('load', syncCodeFade);
+  syncCodeFade();
+
+  /* ========== 状态渲染 ========== */
+  function renderStatus(kind, text, right){
+    el.dot.className = 'dot ' + kind;
+    el.msg.className = 'msg ' + kind;
+    el.msg.textContent = text;
+    el.right.textContent = right || '';
+  }
+  function daysLeft(dateStr){
+    const t = new Date(dateStr + 'T23:59:59').getTime();
+    return Math.ceil((t - Date.now()) / 86400000);
+  }
+  function renderExpire(){
+    el.date.textContent = state.expire;
+    const days = daysLeft(state.expire);
+    let badgeText = '生效中', cls = 'badge';
+    if (!state.authorized) { badgeText = '未授权'; cls = 'badge err'; }
+    else if (days < 0) { badgeText = '已到期'; cls = 'badge err'; }
+    else if (days <= 7) { badgeText = '即将到期'; cls = 'badge warn'; }
+    el.badge.className = cls;
+    el.badge.textContent = badgeText;
+
+    if (!state.authorized) renderStatus('err', '未授权，请离线导入授权码', '');
+    else if (days < 0) renderStatus('err', '授权已到期，请续期后重新导入', '');
+    else if (days <= 7) renderStatus('warn', '授权即将到期，请及时续期', '');
+    else renderStatus('ok', '授权正常', '');
+  }
+
+  /* ========== 服务器连接状态 ========== */
+  function setServer(stateName, text){
+    const lampCls = stateName === 'ok' ? 'ok' : stateName === 'err' ? 'err' : 'connecting';
+    const txtCls  = stateName === 'ok' ? 'ok' : stateName === 'err' ? 'err' : 'connecting';
+    el.srv.className = 'srv ' + (stateName === 'err' ? 'failed' : '');
+    el.srvLamp.className = 'lamp ' + lampCls;
+    el.srvTxt.className = 'txt ' + txtCls;
+    el.srvTxt.textContent = text;
+  }
+
+  /* ========== 日志 ========== */
+  function log(text, type){
+    const t = new Date().toLocaleTimeString('zh-CN', {hour12:false});
+    const line = document.createElement('div');
+    line.innerHTML = '<span class="t">[' + t + ']</span> <span class="' + (type||'') + '">' + text + '</span>';
+    el.log.appendChild(line);
+    el.log.scrollTop = el.log.scrollHeight;
+  }
+
+  /* ========== Toast ========== */
+  let toastTimer;
+  function toast(text, type){
+    clearTimeout(toastTimer);
+    el.toast.textContent = text;
+    el.toast.className = 'toast show ' + (type || '');
+    toastTimer = setTimeout(function(){ el.toast.className = 'toast ' + (type || ''); }, 2200);
+  }
+
+  /* ========== 模拟：连接授权服务器 + 检查更新 ========== */
+  // 真实产品对应：GET /license/status（带设备证明）→ 返回 {expire, version, revoked}
+  // 演示用：URL ?server=off 模拟服务器不可达；?update=1 模拟服务端有更新
+  function checkServerAndUpdate(opts){
+    opts = opts || {};
+    const forceFail = opts.fail;
+    setServer('connecting', '连接中…');
+    log('连接授权服务器…', '');
+
+    setTimeout(function(){
+      if (forceFail) {
+        state.serverOnline = false;
+        setServer('err', '连接失败');
+        log('授权服务器不可达（网络/服务器异常）', 'e');
+        renderStatus('warn', '授权服务器暂时不可达，已使用本地授权状态', '');
+        return;
+      }
+      state.serverOnline = true;
+      setServer('ok', '已连接');
+      log('已连接授权服务器', 's');
+
+      // 检查更新
+      log('检查授权更新…', '');
+      setTimeout(function(){
+        const hasUpdate = opts.update === true || /update=1/.test(location.search);
+        if (!hasUpdate) {
+          log('授权已是最新（v' + state.serverVersion + '）', 's');
+          return;
+        }
+        log('检测到服务端新授权（v' + (state.serverVersion + 1) + '），准备同步…', 'w');
+        renderStatus('warn', '检测到新授权，正在同步…', '');
+        setTimeout(function(){
+          state.serverVersion += 1;
+          state.expire = '2027-06-30';
+          state.authorized = true;
+          renderExpire();
+          log('授权同步完成，到期时间更新为 ' + state.expire + '（v' + state.serverVersion + '）', 's');
+          toast('授权已更新', 'ok');
+        }, 700);
+      }, 400);
+    }, 500);
+  }
+
+  el.srvRetry.onclick = function(){
+    log('手动重试连接…', '');
+    checkServerAndUpdate({});
+  };
+
+  /* ========== 弹窗 ========== */
+  function openModal(){ el.mask.classList.add('show'); setTimeout(function(){ el.license.focus(); }, 50); }
+  function closeModal(){ el.mask.classList.remove('show'); }
+  $('#btnImport').onclick = openModal;
+  $('#btnClose').onclick = closeModal;
+  $('#btnCancel').onclick = closeModal;
+  el.mask.addEventListener('click', function(e){ if (e.target === el.mask) closeModal(); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape') closeModal(); });
+
+  /* ========== 机器码复制 ========== */
+  el.copyMain.onclick = async function(){
+    const code = el.machineCodeMain.textContent.trim();
+    try {
+      await navigator.clipboard.writeText(code);
+      el.copyMain.textContent = '已复制';
+      el.copyMain.classList.add('done');
+      setTimeout(function(){ el.copyMain.textContent = '复制'; el.copyMain.classList.remove('done'); }, 1600);
+      toast('机器码已复制', 'ok');
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(el.machineCodeMain);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      toast('请手动复制选中的机器码', 'err');
+    }
+  };
+
+  /* ========== 导入授权 ========== */
+  $('#btnSubmit').onclick = function(){
+    const val = el.license.value.trim();
+    if (!val) { toast('请粘贴授权码', 'err'); return; }
+    if (/EXPIRED/i.test(val)) {
+      state.authorized = false;
+      renderExpire();
+      log('导入失败：授权码已过期', 'e');
+      toast('授权码已过期', 'err');
+      return;
+    }
+    state.authorized = true;
+    state.expire = '2027-06-30';
+    state.reboundToday = false;
+    renderExpire();
+    closeModal();
+    el.license.value = '';
+    log('导入成功，授权已生效，到期 ' + state.expire, 's');
+    toast('授权导入成功', 'ok');
+  };
+
+  /* ========== 导出设备信息 ========== */
+  $('#btnExport').onclick = function(){
+    const info = {
+      product: state.appName + ' · x64',
+      machineCode: el.machineCodeMain.textContent.trim(),
+      timestamp: new Date().toISOString(),
+      note: '请将此设备信息发送给管理员，用于人工激活'
+    };
+    const blob = new Blob([JSON.stringify(info, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'device-info.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    log('已导出设备信息 device-info.json', 'w');
+    toast('设备信息已导出', 'ok');
+  };
+
+  /* ========== 演示：403 自愈 ========== */
+  $('#sim403').onclick = function(){
+    log('轮询返回 403 invalid device proof（公钥与登记记录不符，触发持证换钥）', 'e');
+    renderStatus('warn', '检测到授权凭证变化，正在自动恢复…', '');
+    setTimeout(function(){
+      if (state.reboundToday) {
+        log('24h 内已换绑过，停止自动重试，转人工', 'w');
+        renderStatus('err', '未能自动开通，请联系管理员', '');
+        toast('自动恢复失败，请联系管理员', 'err');
+        return;
+      }
+      log('持本地授权码发起换绑请求…', '');
+      setTimeout(function(){
+        state.reboundToday = true;
+        state.authorized = true;
+        state.expire = '2027-06-30';
+        state.selfHealed++;
+        renderExpire();
+        log('换绑成功，新注册证明已下发，授权恢复（第 ' + state.selfHealed + ' 次自愈）', 's');
+        renderStatus('ok', '已自动恢复授权', '自愈 +1');
+        toast('已自动恢复授权', 'ok');
+      }, 600);
+    }, 500);
+  };
+
+  $('#simExpire').onclick = function(){
+    const d = new Date(); d.setDate(d.getDate() + 3);
+    state.expire = d.toISOString().slice(0,10);
+    state.authorized = true;
+    renderExpire();
+    log('授权将于 ' + state.expire + ' 到期（3 天内）', 'w');
+  };
+
+  $('#simUpdate').onclick = function(){
+    checkServerAndUpdate({ update: true });
+  };
+
+  $('#simReset').onclick = function(){
+    state.expire = '2026-12-31';
+    state.authorized = true;
+    state.reboundToday = false;
+    state.selfHealed = 0;
+    state.serverVersion = 1;
+    el.log.innerHTML = '';
+    renderExpire();
+    renderStatus('ok', '授权正常', '');
+    checkServerAndUpdate({});
+    toast('已重置', 'ok');
+  };
+
+  /* ========== 首装失败态 ========== */
+  const params = qs;
+  if (params.get('trial') === 'fail') {
+    state.authorized = false;
+    renderExpire();
+    renderStatus('err', '未能自动开通，请联系管理员', '');
+    log('首装自动试用失败（弱指纹/服务器不可达），已降级为人工', 'e');
+  } else {
+    renderExpire();
+  }
+
+  /* ========== 打开页面：自动连接 + 检查一次更新 ========== */
+  checkServerAndUpdate({
+    fail: params.get('server') === 'off'
+  });
+
+  /* 弹窗内 Tab 焦点循环 */
+  el.mask.addEventListener('keydown', function(e){
+    if (e.key !== 'Tab') return;
+    const focusables = el.mask.querySelectorAll('button, textarea, [tabindex]:not([tabindex="-1"])');
+    if (!focusables.length) return;
+    const first = focusables[0], last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+})();
+</script>
+</body>
+</html>

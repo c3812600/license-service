@@ -4,6 +4,8 @@
 | --- | --- |
 | 文档性质 | 团队目标规范 + 本仓库实现 + 现网只读探测差异（目标项未实现前不得宣称已符合） |
 | 修订基线 | 2026-10-17；以实际部署 commit、配置和实测响应为最终联调基线 |
+| 附录基线 | 附录 I / J 与 §8.5「持证换钥」于 2026-11-05 按仓库代码补写 |
+| 文档覆盖 | 客户端部分仅覆盖 **Windows 桌面端**；服务端运行环境为 Linux（附录 J），不含 macOS / 移动端 |
 | 适用范围 | Windows 桌面端（Python / C# / C++ / Electron / Go 等） |
 | 对齐基线 | RCC（ControlCommand）、WinPilot、E-Player 三套现网实现 |
 | 授权服务 | `c3812600/license-service`（线上入口：`https://licenses.lonk.vip`） |
@@ -562,6 +564,7 @@ User-Agent: {AppName}-License-Client/{version}
 | 供应商强制解绑 | 审计日志必留 |
 | 解绑后旧 Token | 服务端标记 `revoked` 后 `latest` 不再返回——**在线设备经 supersede/latest 同步已闭环**（见 §续签·降期）；已下发的离线 Token 本地验签在有效期内仍成立（离线验签固有边界） |
 | 未联网 | 本地仍按 `expires_at` 有效，直至下次联网同步 |
+| 设备公钥漂移（同一机器、密钥变化） | 走「持证换钥」自助换绑（见 §8.5）：机器码与授权归属不变，只换设备公钥，无需解绑授权 |
 
 ---
 
@@ -662,7 +665,7 @@ User-Agent: {AppName}-License-Client/{version}
 | 本仓库（**已部署**，2026-10-18 起强制） | `POST /api/v1/devices/challenge` | `app_name`、`machine_code`、`action=trial/latest/register` | 一次性 `challenge`：trial/latest 120 秒，人工 register 900 秒；公开领取，需代理限流 |
 | 本仓库（**已部署**） | `POST /api/v1/trial/apply` | `app_name`、`machine_code`、`device_public_key`、`challenge`、`signature`；可选 `trial_days` | 首次绑定设备公钥并签发试用；重复领取须原私钥；忽略可选 `fingerprint_ver` |
 | 本仓库（**已部署**） | `POST /api/v1/licenses/latest` | 已登记设备对 `latest` 挑战签名 | 仅未过期、active 的在线 Token；不返回 `offline_manual`；无有效授权 404，不等于吊销 |
-| 本仓库（**已部署**） | `POST /api/v1/devices/register`、`POST /api/v1/devices/revoke` | 管理员 Token；登记时还需新私钥对 `register` 挑战的签名 | 管理员人工登记/轮换/停用设备公钥；停用不撤销已有签名授权 |
+| 本仓库（**已部署**） | `POST /api/v1/devices/register`、`POST /api/v1/devices/revoke` | 登记：管理员 Token **或** 机内有效 `license_key`（持证换钥，见 §8.5），两种情况都需新私钥对 `register` 挑战的签名；停用：管理员 Token | 管理员人工登记/轮换/停用设备公钥；持证换钥为设备公钥漂移后的自助恢复；停用不撤销已有签名授权 |
 | 本仓库 | `POST /api/v1/licenses/renew`、`POST /api/v1/licenses/offline-issue` | `X-Admin-Token` + `app_name`、`machine_code`、`expires_at` 等 | 新签 Token；默认不撤销已有 Token，**缩短到期必须带 `"supersede": true`**（见 §续签·降期）；不得从客户端携带管理员 Token |
 | 本仓库 | `GET /api/v1/licenses/query`、`GET /api/v1/stats` | `X-Admin-Token` | 仅管理员查询或统计；`/admin`、`/admin/stats` 为管理页面 |
 | **已移除** | `GET /api/v1/licenses/latest` | 现返回 **405** | 旧接口已删除，不能安全认证设备；旧客户端必须升级到设备签名版 |
@@ -688,7 +691,7 @@ license-service/device/v1
 
 **跨语言签名对拍向量（固定测试密钥，绝不可用于生产）：** Ed25519 私钥原始 32 字节 seed 为 `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`；`action=latest`、`app_name=ControlCommand`、`machine_code` 为 64 个大写 `A`、`challenge` 为 43 个大写 `A`。按上述规则拼接的签名输入共 156 字节（UTF-8、LF、无尾换行）。无填充 base64url 公钥为 `A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg`，签名为 `HNhvGmg8ez2IrCEP2uypAGDkMHOmGsribExv25ujZSZ5zRIxKdfLucahMQRhufmCdjcWFRJxd1Ljvu2KKUIeAw`。此固定挑战仅用于本地对拍，不能向线上提交。
 
-4. 首次 `trial/apply` 除常规字段外提交 `device_public_key`、`challenge`、`signature`；再次申请使用原公钥和新 `trial` 签名。`POST /api/v1/licenses/latest` 使用新 `latest` 挑战，仅提交 `app_name`、`machine_code`、`challenge`、`signature`；不得在 GET URL 传机器码或管理员 Token。管理员 `devices/register` 接收新密钥的 `register` 挑战/签名和 `X-Admin-Token`，可登记或轮换；`devices/revoke` 接收产品/机器码与管理员 Token，仅停用联网取回能力。丢私钥必须走管理员人工审核，不能凭机器码重领；旧 GET 和无签名试用协议不兼容。
+4. 首次 `trial/apply` 除常规字段外提交 `device_public_key`、`challenge`、`signature`；再次申请使用原公钥和新 `trial` 签名。`POST /api/v1/licenses/latest` 使用新 `latest` 挑战，仅提交 `app_name`、`machine_code`、`challenge`、`signature`；不得在 GET URL 传机器码或管理员 Token。管理员 `devices/register` 接收新密钥的 `register` 挑战/签名和 `X-Admin-Token`，可登记或轮换；同一接口也接受机内有效 `license_key` 作为授权凭证（持证换钥，见 §8.5）。`devices/revoke` 接收产品/机器码与管理员 Token，仅停用联网取回能力。**有有效授权码时丢私钥可自助换钥；既无授权码又无可用私钥时，才必须走管理员人工核验，不能仅凭机器码重领**；旧 GET 和无签名试用协议不兼容。
 5. 设备私钥用于**取回授权码**，不能代替客户端对返回 Token 做独立的发行方 Ed25519 验签、机器码、产品和日期核对。可用的硬件保护优先，但不假设所有 Windows 版本都支持不可导出的 Ed25519。服务端不返回已过期、已标记撤销或 `offline_manual` 记录；设备公钥停用**不会**让已落盘签名 Token 自动失效。
 
 **本仓库试用规则**：建议客户端显式发送 `trial_days`（§6.3.1）；产品上限由 `LICENSE_SERVICE_TRIAL_DAYS_MAP`（JSON：`{"<app_name>": 天数}`）指定，未配置用全局 `LICENSE_SERVICE_TRIAL_DAYS`（代码与示例配置默认 30）。未传/非法时取产品上限，有效正整数钳制到上限。新签试用以服务端 **UTC 日期**计算首次到期日；响应 `data.trial_days` 是首次实际发放天数。并发请求在数据库事务中串行处理，重复领取新签 Token 但沿用**首次到期日**，已过期后申请返回 409 `trial expired`。代码及示例配置默认允许 `ControlCommand`、`E-Player`、`WinPilot`、`iCMS`、`rust-node`，生产可通过 `LICENSE_SERVICE_ALLOWED_APPS` 收窄。此规则是代码与测试结论，公网还须用安全测试环境单独联调。
@@ -698,7 +701,7 @@ license-service/device/v1
 | 动作 | 方法与路径 | 请求 | 响应 `data` | 说明 |
 | --- | --- | --- | --- | --- |
 | 激活 | `POST /api/v1/activate` | `{"key","app_name","machine_code","app_version","fingerprint_ver"}` | `license_token`、`license_id`、`expires_at` | 核销激活码并绑定 |
-| 设备换绑/完整凭据恢复 | 接口待定 | 原设备证明或人工审批与新密钥 | 新设备登记状态 | 当前仅支持管理员登记/轮换公钥，尚无自助换绑或账户级凭据恢复 |
+| 设备换绑/完整凭据恢复 | 接口待定 | 原设备证明或人工审批与新密钥 | 新设备登记状态 | 换机或账户级凭据恢复仍未实现；**同一机器换公钥**已支持「持证换钥」自助完成（§8.5） |
 | 校验/心跳 | `POST /api/v1/validate` | `license_token` 或 `license_id` + `machine_code`；设备凭据/管理凭据认证 | `status`: `active`/`expired`/`revoked`/`grace`，`server_time` | 可静默周期调用；不能把机器码当认证 |
 | 离线申请 | `POST /api/v1/offline-license` | `{"key","app_name","machine_code","fingerprint_ver"}` | `license_token`（同格式） | 供管理台代发 |
 | 解绑 | `POST /api/v1/unbind` | `{"license_id","machine_code"}` + 管理员/经授权的设备凭据 | `ok` | 校验解绑权限、次数、审计；仅 ID/机器码不能解绑 |
@@ -712,7 +715,7 @@ license-service/device/v1
 | validate | 无；客户端以本地验签为准，可调用 `public-key` 做连通性探测 |
 | offline-license | 无；管理台人工签发 |
 
-> 上表为**目标设计，不代表现网已实现**。设备公钥登记与挑战式取回已在本仓库实现但尚未部署或完成真实 Windows 客户端联调；凭据丢失后只能管理员人工登记。`issue_id` 与目标 `license_id` 尚无稳定映射，不能将联网取回能力误写为完整吊销/换绑能力。
+> 上表为**目标设计，不代表现网已实现**。设备公钥登记与挑战式取回已在本仓库实现但尚未部署或完成真实 Windows 客户端联调；凭据恢复分两种：仍持有效授权码时可用「持证换钥」自助完成（§8.5），否则只能管理员人工核验登记。`issue_id` 与目标 `license_id` 尚无稳定映射，不能将联网取回能力误写为完整吊销/换绑能力。
 
 ### 3. 网络容错
 
@@ -734,6 +737,68 @@ license-service/device/v1
 | `ACTIVATION_LIMIT` | 绑定次数超限 | 引导解绑或联系供应商 |
 | `SERVICE_UNAVAILABLE` | 服务不可用 | 静默重试，不影响本地有效授权 |
 | `LICENSE_REQUIRED` | 业务 API 未授权 | 进入激活/申请试用页 |
+
+> **现状提醒**：本仓库返回的是 `{"ok":false,"error":"..."}` 的人类可读错误串，**尚未返回上表的 `code`**。客户端分支判断请看各接口小节里的真实错误串（如 §8.5），上表是目标契约。
+
+### 5. 持证换钥（设备公钥漂移自愈）
+
+> 本节按本仓库实现补写（`service.py: register_device` / `_verify_rotation_license`、`__init__.py: /api/v1/devices/register`）。它**不属于** §8.2 的「目标接口」，是已实现的现行能力。
+
+**触发场景**：设备私钥由 DPAPI 保护，换 Windows 用户、重装系统、VM 模板克隆后可能丢失或变化；服务端登记的仍是旧公钥，客户端用新密钥请求 `latest` 会得到 403 `invalid device proof`。只要客户端**仍持有一张未过期、签名合法、绑定本机**的授权码，就可以自助把新公钥换绑上去，无需管理员介入。
+
+**协议流程（5 步）**：
+
+1. `POST /api/v1/devices/challenge`，`{"app_name","machine_code","action":"register"}`，拿一次性挑战（TTL 900 秒）；
+2. 生成新的 Ed25519 设备密钥对，私钥用 DPAPI 保护；
+3. 用**新私钥**对 §8.1 的规范化消息签名（`action=register`）；
+4. `POST /api/v1/devices/register`，**不带** `X-Admin-Token`，改为在 body 里带 `license_key`：
+
+```json
+{
+  "app_name": "ControlCommand",
+  "machine_code": "2B0A6BB3…F59EA03",
+  "device_public_key": "新公钥的无填充 base64url（43 位）",
+  "challenge": "register 挑战",
+  "signature": "新私钥对规范化消息的签名（86 位）",
+  "license_key": "本机现有的有效授权码"
+}
+```
+
+5. 成功返回 `{"ok": true, "data": {"registered": true}}`；随后用新密钥正常调用 `latest` 取回授权。
+
+**服务端校验顺序与失败结果**（客户端应按错误串分支，不要只看 HTTP 码）：
+
+| # | 校验 | 失败结果 |
+| --- | --- | --- |
+| 1 | 路由层：既无管理员令牌也无 `license_key` | 401 `unauthorized` |
+| 2 | `license_key` 格式 / 产品前缀 | 400 `invalid license_key format` / `license_key prefix mismatch` |
+| 3 | 发行方 Ed25519 签名 | 403 `license_key signature invalid` |
+| 4 | `license_key` 的 `app_name` 与请求一致 | 403 `license_key app mismatch` |
+| 5 | `license_key` 的机器码与请求一致 | 403 `license_key machine mismatch` |
+| 6 | 未过期（按 UTC 日期） | 403 `license_key expired` |
+| 7 | 该设备凭据未被吊销 | 403 `device credential revoked`（**吊销不复活**） |
+| 8 | 每机 24 小时换钥次数 < 3 | 403 `rotation rate limit exceeded, retry tomorrow` |
+| 9 | `register` 挑战签名（新公钥、一次性、900 秒内） | 400/403 `invalid or expired challenge` / `invalid device proof` |
+
+**限流与审计**：
+
+- 路由层：`/api/v1/devices/register` 按来源 IP **10 次/分钟**（与 challenge 30/min、trial 5/min、latest 10/min 同一套内置限流，`LICENSE_SERVICE_RATE_LIMIT=0` 关闭）；
+- 业务层：同一 `(app_name, machine_code_hash)` 每 24 小时最多 **3 次**换钥，计数来自 `audit_logs`；
+- 审计：换钥写 `action='device_rotate'`、`actor='device_rotate'`；管理员登记写 `register_device` / `admin_api`，据此可区分自助与人工。
+
+**安全边界（必须如实写进产品说明）**：
+
+- 换钥的凭证就是授权码本身，而授权码里含机器码。**授权码 + 机器码泄露即可换绑**——这是「以持有有效授权作为身份依据」的固有代价；
+- 校验只看签名、绑定与有效期，**不区分渠道**：离线手工签发的 Token 同样可以用于换钥（`channel='offline_manual'` 只影响它能否被 `latest` 取回）；
+- 因此保留三重约束：每机 24 小时 3 次硬限、全程审计、管理端可用 `devices/revoke` 停用；
+- 换钥是**覆盖式**的：upsert 后旧公钥立即失效，旧设备若仍持原私钥将无法再领取——这正是「漂移自愈」的语义，不要实现成"并存双公钥"，除非另做设计。
+
+**客户端实现要点**：
+
+- 403 要分流：`device not enrolled or revoked` → 转人工（被吊销不能自愈）；`invalid device proof` → 才触发换钥；
+- 换钥过程中**不要清空本地授权**，否则连凭证都丢了；
+- 换钥失败要退避；命中 24 小时 3 次上限时提示联系管理员，不要无限重试；
+- 换钥成功后缓存新公钥指纹，避免同一漂移反复触发。
 
 ---
 
@@ -829,6 +894,7 @@ ensure_license(silent=False) -> bool   # 启动入口
 | 31 | 全删用户数据再安装、重复领试用 | 服务器维持一机一次；离线无有效凭据不得自动重新发放 |
 | 32 | 安装/升级、无管理员权限、卸载重装 | 程序目录只读可运行；授权/工作流在用户数据目录且不被升级覆盖 |
 | 33 | 未登录直连 WebSocket、跨站请求、授权到期期间持续连接 | 握手及连接存续均受门禁控制，不得执行注入等业务操作 |
+| 34 | 持证换钥：持有效授权码换绑新公钥（§8.5） | 换绑成功、旧公钥立即失效；同一机器 24h 内第 4 次返回 403 `rotation rate limit exceeded, retry tomorrow`；被吊销设备不得自愈；离线 Token 同样可用于换钥 |
 
 ---
 
@@ -1086,6 +1152,138 @@ ensure_license(silent: bool) -> bool
 | 安装包 | Inno Setup 按用户安装的 x64 测试包；前端 JS 随包可见，二进制不能保证不可逆向 | 实机安装测试、Authenticode 签名、安装器商业使用许可；不得以混淆替代服务端信任边界 |
 
 **产品发布阻断项：** 设备认证版接口的实际部署与 Windows 客户端对接、`latest` 404 与真实吊销的区分、公钥轮换策略（如计划轮换）、第十二章适用的干净机器测试、历史凭据轮换和安装包签名/许可。可以先做受控安装试点，但不得将未完成项写成已上线或“授权完全闭环”。
+
+---
+
+## 附录 I  数据模型与迁移约定
+
+本节按 `license_service/db.py` 的实际 schema 补写。**任何改表都必须同时更新本节与 `db.SCHEMA_VERSION`**，否则下一个接手的人（或 AI）会按错误的结构写 SQL。
+
+### 1. 表结构
+
+| 表 | 用途 | 主键 / 索引 |
+| --- | --- | --- |
+| `license_issues` | 每一次签发（含试用、续期、离线签发）一条记录；同一设备可有多条，只有未过期且 `status='active'` 的记录可被领取 | 主键 `id`；唯一 `issue_id`、`license_token_hash`；`idx_license_issues_machine(app_name, machine_code_hash)`、`idx_license_issues_type(license_type, status)` |
+| `device_registry` | 设备档案（管理台列表与统计口径） | 主键 `(app_name, machine_code_hash)`；`idx_device_registry_last_seen(last_seen)` |
+| `device_credentials` | 设备 Ed25519 公钥与吊销状态 | 主键 `(app_name, machine_code_hash)` |
+| `device_challenges` | 一次性挑战，短生命周期（120 s / 900 s），用完即删 | 主键 `challenge`（43 字符 base64url）；`idx_device_challenges_expiry(expires_at_epoch)` |
+| `audit_logs` | 审计流水（签发、试用、换钥、重置、吊销） | 主键 `id` |
+
+**关键列：**
+
+- `license_issues`：`issue_id`、`app_name`、`machine_code_hash`、`machine_code_last4`（列表展示用）、`license_type`（`paid` / `trial`）、`channel`、`status`、`issued_at`、`expires_at`、`previous_issue_id`（`supersede` 链路）、`created_by`、`client_ip`、`user_agent`、`app_version`、`license_token`（完整 Token）、`license_token_hash`、`created_at`、`updated_at`。
+- `device_registry`：`machine_code`（**明文**，仅供管理台展示与人工核验；查询一律用 `machine_code_hash`）、`customer_name`、`notes`、`first_seen`、`last_seen`。
+- `device_credentials`：`public_key`（32 字节原始 Ed25519 公钥，BLOB）、`revoked`（0/1，停用后不再允许联网领取，但**不撤销已下发的离线 Token**）。
+- `device_challenges`：`action`（`trial` / `latest` / `register`）、`expires_at_epoch`。
+- `audit_logs`：`action`（`trial_issue` / `license_renew` / `device_rotate` / `forget_machine` 等，**历史值不可改名**）、`actor`、`app_name`、`machine_code_hash`、`issue_id`、`client_ip`、`detail`。
+
+### 2. 时间字段的三套语义（不可混用）
+
+| 字段 | 类型 | 语义 |
+| --- | --- | --- |
+| `license_issues.issued_at` / `expires_at` | TEXT | 日期 `YYYY-MM-DD`，服务端按 **UTC 日切**；`expires_at` 当天仍有效 |
+| `created_at` / `updated_at` / `first_seen` / `last_seen` | TEXT | `CURRENT_TIMESTAMP`，UTC 的 `YYYY-MM-DD HH:MM:SS`，展示层再转北京时间 |
+| `device_challenges.expires_at_epoch` | INTEGER | Unix 秒，唯一带 `_epoch` 后缀的字段 |
+
+> v1 之前该列叫 `expires_at`（INTEGER），与 `license_issues.expires_at`（TEXT 日期）**同名不同义**，已通过迁移改名。新代码不得再造同名字段。
+
+### 3. 迁移机制（v1 起）
+
+- **版本源**：`PRAGMA user_version`，与 `db.SCHEMA_VERSION` 对应；当前 `1`。
+- **执行路径**：`create_app()` → `init_db()`：建表（`IF NOT EXISTS`）→ `_migrate()` → 建索引 → 提交。顺序不能调换——旧库的表已存在，必须先改名再按新列名建索引。
+- **幂等**：每次启动都跑，可重复执行；老库只补差异，新库直接落到最新结构。
+- **只前向**：库的 `user_version` 高于代码的 `SCHEMA_VERSION` 时**拒绝启动**（`RuntimeError`），避免旧代码写新库。
+- **环境要求**：迁移用 `ALTER TABLE ... RENAME COLUMN`，需 **SQLite ≥ 3.25**（Python 3.8+ 自带版本满足）。
+- **v1 内容**：`device_challenges.expires_at` → `expires_at_epoch`，数据原样保留，旧索引由 SQLite 自动改写。
+
+### 4. 升级与回滚
+
+升级前先热备（`scripts/backup_db.py`，见附录 J），迁移本身不需要停机，但备份必须做。
+
+回滚时**代码与库要一起退**，否则列名对不上：
+
+```sql
+ALTER TABLE device_challenges RENAME COLUMN expires_at_epoch TO expires_at;
+PRAGMA user_version = 0;
+```
+
+`device_challenges` 是短生命周期数据，最坏影响是让客户端重新取一次挑战，不会影响已签发授权。
+
+### 5. 已知缺口
+
+- 没有 Alembic 之类的迁移框架：「迁移」就是 `_migrate()` 里的条件分支，新增一版 = 一个 `if version < N` 块 + 提升 `SCHEMA_VERSION` + 更新本节。
+- `issue_id` 与目标接口的 `license_id` 仍无稳定映射（见 §8.2）。
+- 本节不含**索引性能说明**（如按 `expires_at` 扫描的代价），数据量上来后需单独评估。
+
+---
+
+## 附录 J  服务端部署与运维（Linux）
+
+服务端运行在 **Linux + 宝塔面板**，与客户端（Windows）无关。本节按仓库内脚本的实际行为补写；**仓库内不含反向代理、HTTPS 与监控配置**，这些属于面板/宿主机侧。
+
+### 1. 组件与路径
+
+| 项 | 位置 / 说明 |
+| --- | --- |
+| 应用入口 | `app.py`：加载同目录 `.env` 后调用 `create_app()` |
+| 开发运行 | `python app.py`，监听 `0.0.0.0:${PORT:-8765}`，**禁止直接暴露公网** |
+| 生产运行 | 宝塔「Python 项目」托管，由面板生成 gunicorn 启动命令（仓库内无 systemd/nginx 配置） |
+| 首次建项 | `bt_create_license.py`：调面板接口创建 venv 并把项目登记进面板 |
+| 开机自启 | `license_service_autostart.sh`：`cron @reboot` 调用，`sleep 15` → 探测 `8765` 端口 → 幂等启动 |
+| 数据库 | `data/license-service.db`（WAL；`-wal` / `-shm` 属于同一恢复点） |
+| 密钥 | `keys/ed25519-private.pem`、`keys/ed25519-public.pem` |
+| 配置 | `.env`（不入库）；模板见 `.env.example` |
+| 管理页 | `/admin`、`/admin/stats`，静态文件在 `license_service/static/` |
+
+### 2. 关键配置项
+
+| 变量 | 作用 | 注意 |
+| --- | --- | --- |
+| `LICENSE_SERVICE_ADMIN_TOKEN` | 管理 API 鉴权（`X-Admin-Token`） | 无默认值，未配置则管理 API 不可用 |
+| `LICENSE_SERVICE_MACHINE_CODE_SALT` | 机器码哈希盐 | **改动会使历史机器码失效**，与库一起备份 |
+| `LICENSE_SERVICE_DB_PATH` | 数据库路径 | 默认 `./data/license-service.db` |
+| `LICENSE_SERVICE_PRIVATE_KEY_PATH` / `..._PUBLIC_KEY_PATH` | 签发密钥路径 | 旧名 `LICENSE_PRIVATE_KEY_PATH` / `..._PUBLIC_KEY_PATH` 仍兼容 |
+| `LICENSE_SERVICE_ALLOWED_APPS` | 允许的产品 | 生产按实际开通范围收窄 |
+| `LICENSE_SERVICE_TRIAL_DAYS` / `..._TRIAL_DAYS_MAP` | 试用上限 | 默认 30 天，可按产品覆盖 |
+| `LICENSE_SERVICE_RATE_LIMIT` | 内置限流开关 | `0` 关闭；公网建议代理层再加一层 |
+
+### 3. 启停与健康检查
+
+```bash
+# 健康与公钥（只读，不带鉴权）
+curl -s localhost:8765/api/v1/health
+curl -s localhost:8765/api/v1/public-key
+
+# 管理 API 需带管理员令牌
+curl -s -H "X-Admin-Token: $TOKEN" localhost:8765/api/v1/stats
+```
+
+面板里重启项目即可生效；重启不会丢数据，迁移会在 `init_db()` 里自动执行。
+
+### 4. 备份与恢复
+
+```bash
+# 热备：VACUUM INTO，含 WAL，得到一致性快照
+python scripts/backup_db.py                       # 默认 -> data/backups/
+python scripts/backup_db.py /path/db /path/out    # 显式指定源目录与备份目录
+```
+
+恢复流程：停服务 → 用备份文件替换 `data/license-service.db` → 删除同名 `-wal` / `-shm` → 启动 → `curl /api/v1/health` 复核。**密钥与哈希盐必须一起恢复**，否则历史授权无法验证、机器码无法查询。
+
+### 5. 升级流程
+
+1. `python scripts/backup_db.py` 做一次热备；
+2. 拉取代码（`git pull --ff-only`），确认 `git status` 干净；
+3. 面板重启项目 → 启动时自动执行 schema 迁移；
+4. `curl /api/v1/health` + 管理页抽查；
+5. 观察 `audit_logs` 与限流计数是否异常。
+
+### 6. 已知缺口
+
+- 反向代理、HTTPS 证书、请求体大小限制、代理层限流都**不在仓库内**，属于面板/宿主机配置；
+- 没有日志轮转与监控告警配置；
+- 面板生成的 gunicorn 参数（worker 数、超时）不可见，建议至少记录一份到运维笔记；
+- 本附录描述的是「仓库里有什么」，**不代表现网已按此部署**——现网状态见 §8 与 README 的部署说明。
 
 ---
 

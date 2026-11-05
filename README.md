@@ -1,6 +1,11 @@
 # License Service
 
-为 Windows 软件签发机器码绑定的 Ed25519 授权码。当前仓库实现设备公钥登记、签名认证领取续期、试用申请、管理员签发/登记/吊销设备凭据、查询和统计；**不包含**激活码核销、完整许可证吊销同步或换绑。客户端须自行实现机器码计算、本地验签、持久化与防时间回拨；详见 [设计规范](Windows%20软件加密授权系统设计规范与对接文档.md)。
+为 Windows 软件签发机器码绑定的 Ed25519 授权码。当前仓库实现设备公钥登记、签名认证领取续期、试用申请、管理员签发/登记/吊销设备凭据、查询和统计；**不包含**激活码核销、完整许可证吊销同步或换绑。客户端须自行实现机器码计算、本地验签、持久化与防时间回拨；详见 [设计规范](docs/license-design-spec.md)。
+
+## 文档
+
+- [设计规范与对接文档](docs/license-design-spec.md)：机器码、Token 字节格式、DPAPI 存储、防回拨、接口契约，附录含数据模型与迁移约定（附录 I）、Linux 部署运维（附录 J）。
+- [客户端界面规范 Demo](docs/client-ui-demo.html)：单文件参考实现，覆盖正常/到期/未授权/服务器不可达/自愈各状态，含深浅色主题。设计 token 与管理端 `admin.html`、`stats.html` 共用同一套命名。
 
 ## 本仓库接口
 
@@ -11,7 +16,7 @@
 | POST | `/api/v1/devices/challenge` | 无 | 一次性挑战：`trial/latest` 120 秒，`register` 15 分钟 |
 | POST | `/api/v1/trial/apply` | 设备签名 | 首次登记公钥并签发试用；重复领取须用原设备私钥签名 |
 | POST | `/api/v1/licenses/latest` | 已登记设备签名 | 领取未过期的在线授权；原无认证 GET 现返回 405 |
-| POST | `/api/v1/devices/register` | `X-Admin-Token` + 新设备签名 | 人工登记/轮换公钥，适用于已有付费授权或密钥丢失 |
+| POST | `/api/v1/devices/register` | `X-Admin-Token` **或** `license_key` + 新设备签名 | 登记/轮换公钥；持有效授权码可自助换钥（每机 24 小时 3 次，见规范 §8.5） |
 | POST | `/api/v1/devices/revoke` | `X-Admin-Token` | 禁止设备继续联网领取；**不撤销已签发的离线 Token** |
 | POST | `/api/v1/licenses/renew` | `X-Admin-Token` | 新签一张授权，**不会自动撤销旧授权** |
 | POST | `/api/v1/licenses/offline-issue` | `X-Admin-Token` | 签发离线授权供手动交付 |
@@ -41,7 +46,7 @@ license-service/device/v1
 {"app_name":"ControlCommand","machine_code":"本机机器码","app_version":"1.2.3","trial_days":30,"device_public_key":"43位无填充base64url","challenge":"服务端挑战","signature":"86位无填充base64url"}
 ```
 
-恢复试用须重新领取 `trial` 挑战并用**原私钥**签名；没有公钥登记的旧试用/付费记录不得自助认领，由管理员核实后走 `register`。领取续期先取 `latest` 挑战，再向 `POST /api/v1/licenses/latest` 提交 `app_name`、`machine_code`、`challenge`、`signature`（不提交公钥）。挑战仅能使用一次，不能跨用途、产品或机器；设备凭据被吊销或证明失败返回 403；没有未过期在线授权返回 404，**不是吊销证据**。离线手工签发的 Token 不由 `latest` 返回。管理员登记/轮换时，客户端先获取 `register` 挑战并对相同格式内容签名，管理员通过受控渠道取得公钥、机器码、挑战和签名，连同管理员 Token 调用 `/api/v1/devices/register`；丢失私钥需要人工核验并重新登记。管理员可通过 `/api/v1/devices/revoke` 提交 `app_name` 和 `machine_code` 停用旧设备凭据。
+恢复试用须重新领取 `trial` 挑战并用**原私钥**签名；没有公钥登记的旧试用/付费记录不得自助认领，由管理员核实后走 `register`。领取续期先取 `latest` 挑战，再向 `POST /api/v1/licenses/latest` 提交 `app_name`、`machine_code`、`challenge`、`signature`（不提交公钥）。挑战仅能使用一次，不能跨用途、产品或机器；设备凭据被吊销或证明失败返回 403；没有未过期在线授权返回 404，**不是吊销证据**。离线手工签发的 Token 不由 `latest` 返回。管理员登记/轮换时，客户端先获取 `register` 挑战并对相同格式内容签名，管理员通过受控渠道取得公钥、机器码、挑战和签名，连同管理员 Token 调用 `/api/v1/devices/register`；若客户端仍持有效授权码，可用它替代管理员 Token 自助换钥（每机 24 小时 3 次，见规范 §8.5），既无授权码又无可用私钥时才必须人工核验并重新登记。管理员可通过 `/api/v1/devices/revoke` 提交 `app_name` 和 `machine_code` 停用旧设备凭据。
 
 `LICENSE_SERVICE_TRIAL_DAYS` 是全局上限（代码与示例配置默认 30），`LICENSE_SERVICE_TRIAL_DAYS_MAP` 可设置产品上限。有效正整数 `trial_days` 被钳制到上限；缺失/非法时取上限。新签试用按服务端 UTC 日期计算首次到期日；响应 `data.trial_days` 是首次实际发放天数。已登记设备重复领取会新签一个 Token，但沿用首次到期日；过期后返回 HTTP 409 `trial expired`。服务端内置接口限流（challenge 30/min、trial 5/min、latest 10/min，按来源 IP+接口计数，`LICENSE_SERVICE_RATE_LIMIT=0` 关闭），公网仍建议在代理层再加一层 IP 限流、请求体大小限制与监控。审计/限流所用的客户端 IP **只在连接来源是本机或容器网桥**（`127/8`、`::1`、`172.16/12`，如 cloudflared 容器）时才采纳 `X-Forwarded-For`；直连 8765 的伪造代理头一律剥掉，审计 IP 不可伪造。设备公钥签名用于**取回授权**，不能代替客户端下载后的 Ed25519 许可证验签。
 

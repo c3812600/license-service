@@ -1,40 +1,74 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>License Stats</title>
+    <script>
+        /* 主题预置：与 admin.html 共用 admin-theme，避免跨页切换后闪白 */
+        (function () {
+            try {
+                var t = localStorage.getItem('admin-theme');
+                if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {}
+        })();
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
-        :root {
-            --bg: #0f1117;
-            --card: #1a1d27;
-            --border: #2a2d3a;
-            --text: #e4e4e7;
-            --text-dim: #8b8d97;
-            --accent: #6366f1;
-            --accent-hover: #818cf8;
+        /* ========== 主题变量 ==========
+           与 admin.html / client-demo.html 共用同一套 token 命名与取值（浅色为默认）。
+           --info / --shadow / --radius 为统计页扩展。 */
+        :root, [data-theme="light"] {
+            --bg: #f5f6f8;
+            --card: #fff;
+            --border: #e3e6eb;
+            --text: #1f2329;
+            --text-dim: #6b7280;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+            --success: #16a34a;
+            --danger: #dc2626;
+            --warn: #d97706;
+            --info: #0891b2;
+            --radius: 12px;
+            --shadow: 0 1px 2px rgba(0,0,0,.04);
+        }
+
+        [data-theme="dark"] {
+            --bg: #0f1218;
+            --card: #171b23;
+            --border: #2a303b;
+            --text: #e6e9ef;
+            --text-dim: #8b93a1;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
             --success: #22c55e;
             --danger: #ef4444;
             --warn: #f59e0b;
-            --info: #3b82f6;
+            --info: #22d3ee;
+            --shadow: 0 1px 2px rgba(0,0,0,.3);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
             background: var(--bg);
             color: var(--text);
             min-height: 100vh;
+            transition: background .2s, color .2s;
         }
 
         .header {
             border-bottom: 1px solid var(--border);
+            background: var(--card);
+            box-shadow: var(--shadow);
             padding: 16px 24px;
             display: flex;
             align-items: center;
             gap: 12px;
+            transition: background .2s, border-color .2s;
         }
 
         .header h1 { font-size: 18px; font-weight: 600; }
@@ -66,10 +100,31 @@
             color: var(--accent);
         }
 
+        .theme-btn {
+            width: 30px;
+            height: 30px;
+            padding: 0;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--text-dim);
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: none;
+            transition: border-color .15s, color .15s;
+        }
+
+        .theme-btn:hover { border-color: var(--accent); color: var(--accent); }
+
         .token-bar {
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 10px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
             padding: 16px 20px;
             margin: 24px auto 0;
             max-width: 800px;
@@ -160,7 +215,8 @@
         .stat-card {
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 10px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
             padding: 20px;
             text-align: center;
         }
@@ -197,7 +253,8 @@
         .chart-card {
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 10px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
             padding: 20px;
         }
 
@@ -222,7 +279,8 @@
         .table-card {
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 10px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
             padding: 20px;
             margin-bottom: 24px;
             overflow-x: auto;
@@ -266,13 +324,13 @@
             font-weight: 600;
         }
 
-        .badge.paid { background: rgba(99,102,241,0.15); color: #818cf8; }
-        .badge.trial { background: rgba(245,158,11,0.15); color: #f59e0b; }
-        .badge.active { background: rgba(34,197,94,0.15); color: #22c55e; }
-        .badge.expired { background: rgba(239,68,68,0.15); color: #ef4444; }
-        .badge.warn { background: rgba(245,158,11,0.15); color: #f59e0b; }
+        .badge.paid { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+        .badge.trial { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+        .badge.active { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
+        .badge.expired { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+        .badge.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 
-        .mono { font-family: 'SF Mono', Monaco, monospace; font-size: 12px; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 
         .empty {
             text-align: center;
@@ -292,6 +350,7 @@
     <h1>License Stats</h1>
     <span class="tag">Dashboard</span>
     <a href="/admin" class="back-btn">← 返回管理</a>
+    <button class="theme-btn" id="theme-btn" title="切换深色/浅色" aria-label="切换深色/浅色">🌙</button>
 </div>
 
 <div class="token-bar">
@@ -313,6 +372,7 @@
     const tokenStatus = document.getElementById('tokenStatus');
     const content = document.getElementById('content');
     let charts = [];
+    let lastData = null;
 
     // Remove credentials saved by older versions; keep the token in memory only.
     localStorage.removeItem('lic_admin_token');
@@ -345,12 +405,23 @@
         }
     }
 
-    const COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899', '#14b8a6', '#a855f7'];
+    const COLORS_FALLBACK = ['#ec4899', '#14b8a6', '#a855f7'];
+    const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    // 图表配色从主题 token 取，深浅色切换后重新渲染即可自适应
+    const palette = () => [
+        cssVar('--accent'), cssVar('--success'), cssVar('--warn'), cssVar('--danger'),
+        cssVar('--info'), ...COLORS_FALLBACK
+    ];
 
     function renderDashboard(data) {
+        lastData = data;
         // Destroy old charts
         charts.forEach(c => c.destroy());
         charts = [];
+
+        const COLORS = palette();
+        const TICK = cssVar('--text-dim');
+        const GRID = cssVar('--border');
 
         const o = data.overview;
         let html = '';
@@ -441,8 +512,8 @@
         content.innerHTML = html;
 
         // Render charts
-        const chartOpts = { responsive: true, maintainAspectRatio: true, plugins: { legend: { labels: { color: '#8b8d97', font: { size: 12 } } } } };
-        const doughnutOpts = { ...chartOpts, cutout: '55%', plugins: { ...chartOpts.plugins, legend: { position: 'bottom', labels: { color: '#8b8d97', font: { size: 12 }, padding: 16 } } } };
+        const chartOpts = { responsive: true, maintainAspectRatio: true, plugins: { legend: { labels: { color: TICK, font: { size: 12 } } } } };
+        const doughnutOpts = { ...chartOpts, cutout: '55%', plugins: { ...chartOpts.plugins, legend: { position: 'bottom', labels: { color: TICK, font: { size: 12 }, padding: 16 } } } };
 
         // App distribution
         charts.push(new Chart(document.getElementById('chartApp'), {
@@ -459,7 +530,7 @@
             type: 'doughnut',
             data: {
                 labels: data.type_distribution.map(d => d.license_type),
-                datasets: [{ data: data.type_distribution.map(d => d.count), backgroundColor: ['#6366f1', '#f59e0b'], borderWidth: 0 }]
+                datasets: [{ data: data.type_distribution.map(d => d.count), backgroundColor: [COLORS[0], COLORS[2]], borderWidth: 0 }]
             },
             options: doughnutOpts
         }));
@@ -469,7 +540,7 @@
             type: 'doughnut',
             data: {
                 labels: data.channel_distribution.map(d => d.channel),
-                datasets: [{ data: data.channel_distribution.map(d => d.count), backgroundColor: ['#22c55e', '#3b82f6'], borderWidth: 0 }]
+                datasets: [{ data: data.channel_distribution.map(d => d.count), backgroundColor: [COLORS[1], COLORS[4]], borderWidth: 0 }]
             },
             options: doughnutOpts
         }));
@@ -479,7 +550,7 @@
             type: 'doughnut',
             data: {
                 labels: data.creator_distribution.map(d => d.created_by),
-                datasets: [{ data: data.creator_distribution.map(d => d.count), backgroundColor: ['#a855f7', '#ec4899'], borderWidth: 0 }]
+                datasets: [{ data: data.creator_distribution.map(d => d.count), backgroundColor: [COLORS[7], COLORS[5]], borderWidth: 0 }]
             },
             options: doughnutOpts
         }));
@@ -492,8 +563,8 @@
                 datasets: [{
                     label: '签发数',
                     data: data.monthly_trend.map(d => d.count),
-                    backgroundColor: 'rgba(99,102,241,0.6)',
-                    borderColor: '#6366f1',
+                    backgroundColor: COLORS[0] + '99',
+                    borderColor: COLORS[0],
                     borderWidth: 2,
                     borderRadius: 6,
                     barThickness: 60
@@ -503,8 +574,8 @@
                 ...chartOpts,
                 plugins: { ...chartOpts.plugins, legend: { display: false } },
                 scales: {
-                    x: { ticks: { color: '#8b8d97' }, grid: { display: false } },
-                    y: { ticks: { color: '#8b8d97', stepSize: 1 }, grid: { color: '#2a2d3a' }, beginAtZero: true }
+                    x: { ticks: { color: TICK }, grid: { display: false } },
+                    y: { ticks: { color: TICK, stepSize: 1 }, grid: { color: GRID }, beginAtZero: true }
                 }
             }
         }));
@@ -528,8 +599,8 @@
                     ...chartOpts,
                     plugins: { ...chartOpts.plugins, legend: { display: false } },
                     scales: {
-                        x: { ticks: { color: '#8b8d97', stepSize: 1 }, grid: { color: '#2a2d3a' }, beginAtZero: true },
-                        y: { ticks: { color: '#8b8d97' }, grid: { display: false } }
+                        x: { ticks: { color: TICK, stepSize: 1 }, grid: { color: GRID }, beginAtZero: true },
+                        y: { ticks: { color: TICK }, grid: { display: false } }
                     }
                 }
             }));
@@ -542,11 +613,27 @@
             type: 'doughnut',
             data: {
                 labels: data.status_distribution.map(d => d.status),
-                datasets: [{ data: data.status_distribution.map(d => d.count), backgroundColor: ['#22c55e', '#ef4444', '#f59e0b'], borderWidth: 0 }]
+                datasets: [{ data: data.status_distribution.map(d => d.count), backgroundColor: [COLORS[1], COLORS[3], COLORS[2]], borderWidth: 0 }]
             },
             options: doughnutOpts
         }));
     }
+
+    // ---- 主题切换（与 admin.html 共用 admin-theme；切换后按最近一次数据重绘图表）----
+    const THEME_KEY = 'admin-theme';
+    function applyTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        const btn = document.getElementById('theme-btn');
+        btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+        btn.title = theme === 'dark' ? '切换浅色' : '切换深色';
+        try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
+    }
+    document.getElementById('theme-btn').addEventListener('click', function () {
+        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        if (lastData) renderDashboard(lastData);
+    });
+    applyTheme(document.documentElement.getAttribute('data-theme') || 'light');
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     // 时间显示：存储为 UTC，此处转北京时间（Asia/Shanghai）——标准做法「存 UTC、显示本地」
