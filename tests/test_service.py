@@ -671,6 +671,178 @@ class LicenseServiceTests(unittest.TestCase):
         self.assertEqual(codes[:3], [200, 200, 200])
         self.assertEqual(codes[3], 403)
 
+    # ---- 激活码 / 在线校验 / 解绑 ----
+
+    def _issue_codes(self, **overrides):
+        payload = {"app_name": "ControlCommand", "days": 30, "count": 2}
+        payload.update(overrides)
+        return self.client.post(
+            "/api/v1/activation-codes", json=payload,
+            headers={"X-Admin-Token": "test-admin"},
+        )
+
+    def test_activation_code_lifecycle(self):
+        created = self._issue_codes(days=30, count=2)
+        self.assertEqual(created.status_code, 200, created.json)
+        codes = created.json["data"]["codes"]
+        self.assertEqual(len(codes), 2)
+        for code in codes:
+            self.assertRegex(code, r"^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$")
+
+        machine = "7" * 64
+        proof = self.device_proof("activate", machine=machine)
+        first = self.client.post(
+            "/api/v1/activate", json={**proof, "code": codes[0], "app_version": "1.0.0"}
+        )
+        self.assertEqual(first.status_code, 200, first.json)
+        data = first.json["data"]
+        self.assertEqual(data["license_key"].split(".")[0], "RCC1")
+        self.assertEqual(
+            data["expires_at"],
+            (dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=30)).isoformat(),
+        )
+        self.assertEqual(data["channel"], "activation_code")
+
+        # 兑换即登记设备：随后可正常 validate
+        validate_proof = self.device_proof("validate", machine=machine)
+        checked = self.client.post(
+            "/api/v1/validate", json={**validate_proof, "license_token": data["license_key"]}
+        )
+        self.assertEqual(checked.status_code, 200, checked.json)
+        self.assertEqual(checked.json["data"]["status"], "active")
+
+        again = self.client.post(
+            "/api/v1/activate",
+            json={**self.device_proof("activate", machine=machine), "code": codes[0].lower()},
+        )
+        self.assertEqual(again.status_code, 400)
+        self.assertEqual(again.json["error"], "activation code already used")
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            row = conn.execute(
+                "SELECT status, issue_id FROM activation_codes WHERE code=?",
+                (codes[0].replace("-", ""),),
+            ).fetchone()
+        self.assertEqual(row[0], "used")
+        self.assertEqual(row[1], data["issue_id"])
+
+    def test_activation_code_rejects_bad_input(self):
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/activation-codes", json={"app_name": "ControlCommand", "days": 30}
+            ).status_code,
+            401,
+        )
+        self.assertEqual(self._issue_codes(days=0).status_code, 400)
+        self.assertEqual(self._issue_codes(count=101).status_code, 400)
+
+        codes = self._issue_codes(days=30, count=1).json["data"]["codes"]
+        machine = "8" * 64
+        proof = self.device_proof("activate", machine=machine)
+        bad_signature = {**proof, "signature": "A" * 86}
+        self.assertEqual(
+            self.client.post("/api/v1/activate", json={**bad_signature, "code": codes[0]}).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post("/api/v1/activate", json={**proof, "code": "not-a-code"}).status_code,
+            400,
+        )
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute("UPDATE activation_codes SET expires_at='2020-01-01'")
+        expired = self.client.post("/api/v1/activate", json={**proof, "code": codes[0]})
+        self.assertEqual(expired.status_code, 400)
+        self.assertEqual(expired.json["error"], "activation code expired")
+
+    def test_activation_code_app_mismatch(self):
+        codes = self._issue_codes(days=30, count=1).json["data"]["codes"]
+        with patch.object(Config, "ALLOWED_APP_NAMES", ("ControlCommand", "E-Player")):
+            app = create_app()
+            client = app.test_client()
+            proof = self.device_proof(
+                "activate", machine="8" * 64, app_name="E-Player", client=client
+            )
+            result = client.post("/api/v1/activate", json={**proof, "code": codes[0]})
+        self.assertEqual(result.status_code, 400)
+        self.assertEqual(result.json["error"], "activation code app mismatch")
+
+    def test_validate_reports_active_expired_and_revoked(self):
+        machine = "9" * 64
+        license_key = self.apply_trial(machine=machine).json["data"]["license_key"]
+
+        def check():
+            proof = self.device_proof("validate", machine=machine)
+            return self.client.post("/api/v1/validate", json={**proof, "license_token": license_key})
+
+        active = check()
+        self.assertEqual(active.status_code, 200, active.json)
+        self.assertEqual(active.json["data"]["status"], "active")
+        self.assertTrue(active.json["data"]["server_time"].endswith("Z"))
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute("UPDATE license_issues SET expires_at='2020-01-01'")
+        self.assertEqual(check().json["data"]["status"], "expired")
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute("UPDATE license_issues SET status='revoked'")
+        self.assertEqual(check().json["data"]["status"], "revoked")
+
+    def test_validate_rejects_unregistered_device_and_foreign_token(self):
+        self.apply_trial(machine="A" * 64)
+        unregistered = self.device_proof("validate", machine="B" * 64)
+        rejected = self.client.post(
+            "/api/v1/validate", json={**unregistered, "license_token": "X.y.z"}
+        )
+        self.assertEqual(rejected.status_code, 403)
+        self.assertEqual(rejected.json["error"], "device not enrolled or revoked")
+
+        self.apply_trial(machine="B" * 64)
+        foreign_key = self.apply_trial(machine="C" * 64).json["data"]["license_key"]
+        proof = self.device_proof("validate", machine="B" * 64)
+        mismatch = self.client.post(
+            "/api/v1/validate", json={**proof, "license_token": foreign_key}
+        )
+        self.assertEqual(mismatch.status_code, 403)
+        self.assertEqual(mismatch.json["error"], "license machine mismatch")
+
+    def test_unbind_revokes_licenses_and_credential(self):
+        machine = "D" * 64
+        self.apply_trial(machine=machine)
+        headers = {"X-Admin-Token": "test-admin"}
+
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/unbind", json={"app_name": "ControlCommand", "machine_code": machine}
+            ).status_code,
+            401,
+        )
+
+        first = self.client.post(
+            "/api/v1/unbind",
+            json={"app_name": "ControlCommand", "machine_code": machine},
+            headers=headers,
+        )
+        self.assertEqual(first.status_code, 200, first.json)
+        self.assertEqual(first.json["data"]["revoked_issues"], 1)
+        self.assertTrue(first.json["data"]["credential_revoked"])
+
+        proof = self.device_proof("latest", machine=machine)
+        self.assertEqual(
+            self.client.post("/api/v1/licenses/latest", json=proof).status_code, 403
+        )
+
+        second = self.client.post(
+            "/api/v1/unbind",
+            json={"app_name": "ControlCommand", "machine_code": machine},
+            headers=headers,
+        )
+        self.assertEqual(second.json["data"]["revoked_issues"], 0)
+        self.assertFalse(second.json["data"]["credential_revoked"])
+
     def test_untrusted_peer_proxy_headers_are_stripped(self):
         """体检 R2：非可信来源伪造 XFF 不被采纳；本机/容器网桥来源才信任。"""
         from license_service import _strip_untrusted_proxy_headers

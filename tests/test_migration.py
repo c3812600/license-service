@@ -102,5 +102,27 @@ class SchemaMigrationTests(unittest.TestCase):
             self.assertEqual(row, ("latest", 999))
 
 
+    def test_v1_database_gains_activation_codes(self):
+        """v1 库升级到 v2：新增 activation_codes 表，版本号推进，业务数据不受影响。"""
+        init_db(self.db)
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute("DROP TABLE activation_codes")
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+
+        init_db(self.db)
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            self.assertEqual(
+                conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+            )
+        self.assertIn("activation_codes", tables)
+        self.assertIn("device_challenges", tables)
+
+
 if __name__ == "__main__":
     unittest.main()

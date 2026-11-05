@@ -13,7 +13,7 @@ python -m pip install -r requirements.txt      # Python 3.10+；Flask>=3、crypt
 cp .env.example .env                           # 至少填 ADMIN_TOKEN 与 MACHINE_CODE_SALT
 python app.py                                  # 开发用，默认 8765，禁止直接暴露公网
 
-python -m unittest discover -s tests -v        # 全部测试（当前 41 个，覆盖率约 87%）
+python -m unittest discover -s tests -v        # 全部测试（当前 48 个，覆盖率约 87%）
 python -m unittest tests.test_migration -v     # 只跑 schema 迁移测试
 ```
 
@@ -27,8 +27,8 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑同一套测试（Python 3
 app.py                        # 入口：加载 .env 后 create_app()
 license_service/
   __init__.py                 # 路由 + 限流 + 错误处理（admin_* 前缀 = 需 X-Admin-Token）
-  service.py                  # 业务逻辑：签发/试用/续期/换钥/设备档案/统计
-  device_auth.py              # 设备挑战与签名证明（trial/latest/register）
+  service.py                  # 业务逻辑：签发/试用/续期/换钥/激活码/校验/解绑/设备档案/统计
+  device_auth.py              # 设备挑战与签名证明（trial/latest/register/validate/activate）
   crypto.py                   # Token 编解码、Ed25519 签发与验签、密钥对生成
   db.py                       # 建表 + SCHEMA_VERSION 迁移
   config.py                   # 环境变量 → Config（统一 LICENSE_SERVICE_ 前缀）
@@ -69,10 +69,11 @@ docs/license-design-spec.md   # 唯一权威规范（含数据模型附录 I、�
 
 ## 已知缺口（不要假装已解决）
 
-- `activate` / `validate` / `unbind` 仍是目标接口，未实现；
+- 自助解绑（按 `license_id` 计次）、账户级凭据恢复、自助换机未实现；
 - 业务错误码 `code` 未落地，客户端只能匹配错误字符串；
 - 无反向代理/HTTPS/监控配置（属面板与宿主机）；
-- Linux 客户端设计缺失（规范只覆盖 Windows 客户端的机器码、DPAPI、防回拨）；
+- Linux 客户端只有设计（规范附录 K），仓库内无实现；
+- `activation-codes` / `activate` / `validate` / `unbind` 已实现但**尚未部署**（三态见规范 §8.1）；
 - 无前端自动化测试（UI 靠人工开页面看）。
 
 ## 提交约定

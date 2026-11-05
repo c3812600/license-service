@@ -15,6 +15,7 @@ from .db import init_db
 from .device_auth import create_challenge
 from .service import (
     fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_device, query_licenses, register_device, renew_license, revoke_device, validate_app_name, list_devices, update_device_meta, touch_device, fetch_active_license_key,
+    create_activation_codes, activate_with_code, validate_license, unbind_device,
 )
 
 
@@ -65,6 +66,10 @@ _RATE_LIMITS = {
     # 持证换钥/设备登记是公开可达路径（license_key 方式），按 IP 兜底限流；
     # 每机换绑次数另有 audit_logs 每日 3 次硬限（见 _verify_rotation_license）
     "/api/v1/devices/register": (10, 60),
+    "/api/v1/activation-codes": (20, 60),
+    "/api/v1/activate": (5, 60),
+    "/api/v1/validate": (20, 60),
+    "/api/v1/unbind": (10, 60),
     "/api/v1/devices/challenge": (30, 60),
     "/api/v1/trial/apply": (5, 60),
     "/api/v1/licenses/latest": (10, 60),
@@ -385,6 +390,108 @@ def create_app():
         try:
             result = forget_device(
                 app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
+            )
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        return _ok(result)
+
+    # ---- 激活码 / 激活 / 在线校验 / 解绑 ----
+
+    @app.post("/api/v1/activation-codes")
+    def admin_create_activation_codes():
+        """批量生成一次性激活码（管理员）：码可离线交付，兑换时才绑定设备。"""
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        try:
+            created = create_activation_codes(
+                app,
+                app_name=(data.get("app_name") or "").strip(),
+                days=data.get("days"),
+                count=data.get("count", 1),
+                license_type=(data.get("license_type") or "paid").strip() or "paid",
+                customer_name=(data.get("customer_name") or "").strip(),
+                notes=(data.get("notes") or "").strip(),
+                expires_at=(data.get("expires_at") or "").strip(),
+                created_by="admin_api",
+            )
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        return _ok(created)
+
+    @app.post("/api/v1/activate")
+    def activate():
+        """兑换激活码：设备签名 + 一次性核销，成功即绑定公钥并返回 Token。"""
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        for field in ("app_name", "machine_code", "code", "device_public_key", "challenge", "signature"):
+            if not isinstance(data.get(field), str) or not data.get(field).strip():
+                return _error(f"{field} is required")
+        try:
+            issued = activate_with_code(
+                app,
+                app_name=data["app_name"].strip(),
+                machine_code=data["machine_code"],
+                code=data["code"],
+                device_public_key=data["device_public_key"],
+                challenge=data["challenge"],
+                signature=data["signature"],
+                client_ip=request.remote_addr or "",
+                user_agent=request.headers.get("User-Agent") or "",
+                app_version=str(data.get("app_version") or "").strip(),
+            )
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        except PermissionError as exc:
+            return _error(str(exc), 403)
+        except RuntimeError as exc:
+            return _error(str(exc), 409)
+        return _ok(issued)
+
+    @app.post("/api/v1/validate")
+    def validate():
+        """设备签名的在线状态核查：不返回新 Token，只返回状态与服务器时间。"""
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        for field in ("app_name", "machine_code", "license_token", "challenge", "signature"):
+            if not isinstance(data.get(field), str) or not data.get(field).strip():
+                return _error(f"{field} is required")
+        try:
+            result = validate_license(
+                app,
+                app_name=data["app_name"].strip(),
+                machine_code=data["machine_code"],
+                license_token=data["license_token"].strip(),
+                challenge=data["challenge"],
+                signature=data["signature"],
+                client_ip=request.remote_addr or "",
+            )
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        except PermissionError as exc:
+            return _error(str(exc), 403)
+        return _ok(result)
+
+    @app.post("/api/v1/unbind")
+    def admin_unbind_device():
+        """管理员解绑：吊销该机器全部 active 授权并停用设备凭据（换机场景）。"""
+        auth_error = _require_admin_token(app)
+        if auth_error:
+            return auth_error
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        try:
+            result = unbind_device(
+                app,
+                app_name=(data.get("app_name") or "").strip(),
+                machine_code=(data.get("machine_code") or "").strip(),
+                created_by="admin_api",
             )
         except ValueError as exc:
             return _error(str(exc), 400)

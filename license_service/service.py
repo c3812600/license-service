@@ -1,4 +1,6 @@
 import datetime as dt
+import secrets
+import sqlite3
 import re
 import uuid
 
@@ -716,6 +718,273 @@ def forget_device(app, *, app_name, machine_code):
             "removed_credential": cred.rowcount > 0,
             "removed_challenges": chall.rowcount,
         }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 激活码（activate 通道）
+# ---------------------------------------------------------------------------
+
+_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # 去掉易混淆的 I/L/O/0/1
+_CODE_GROUPS = 4
+_CODE_GROUP_SIZE = 4
+_CODE_LENGTH = _CODE_GROUPS * _CODE_GROUP_SIZE  # 16 字符 ≈ 80 bit
+
+
+def normalize_activation_code(code):
+    """去掉分隔符与大小写差异；长度或字符集不符即视为无效。"""
+    compact = "".join(ch for ch in str(code or "").upper() if ch.isalnum())
+    if len(compact) != _CODE_LENGTH or any(ch not in _CODE_ALPHABET for ch in compact):
+        raise ValueError("invalid activation code")
+    return compact
+
+
+def _format_activation_code(compact):
+    return "-".join(
+        compact[i:i + _CODE_GROUP_SIZE] for i in range(0, len(compact), _CODE_GROUP_SIZE)
+    )
+
+
+def _new_activation_code():
+    return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LENGTH))
+
+
+def create_activation_codes(
+    app, *, app_name, days, count=1, license_type="paid",
+    customer_name="", notes="", expires_at="", created_by="admin_api",
+):
+    """批量生成一次性激活码：码可离线交付，兑换时才绑定设备并签发 Token。"""
+    validate_app_name(app, app_name)
+    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 3650:
+        raise ValueError("days must be an integer between 1 and 3650")
+    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 100:
+        raise ValueError("count must be an integer between 1 and 100")
+    if license_type not in ("paid", "trial"):
+        raise ValueError("invalid license_type")
+    expires_text = ""
+    if expires_at:
+        expires_text = _parse_date(expires_at).isoformat()
+        if _parse_date(expires_text) < _today():
+            raise ValueError("expires_at is in the past")
+
+    conn = connect_db(app.config["DATABASE_PATH"])
+    created = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for _ in range(count):
+            for _attempt in range(5):
+                compact = _new_activation_code()
+                try:
+                    conn.execute(
+                        """INSERT INTO activation_codes(
+                               code, app_name, license_type, days, customer_name, notes,
+                               status, expires_at, created_by)
+                           VALUES(?,?,?,?,?,?,'issued',?,?)""",
+                        (compact, app_name, license_type, days, customer_name, notes,
+                         expires_text, created_by),
+                    )
+                    break
+                except sqlite3.IntegrityError:
+                    continue
+            else:
+                raise RuntimeError("activation code generation collision")
+            created.append(_format_activation_code(compact))
+        write_audit_log(
+            app, action="issue_activation_codes", actor=created_by, app_name=app_name,
+            detail="count=%d days=%d" % (count, days), conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {
+        "app_name": app_name,
+        "days": days,
+        "license_type": license_type,
+        "expires_at": expires_text,
+        "codes": created,
+    }
+
+
+def activate_with_code(
+    app, *, app_name, machine_code, code, device_public_key, challenge, signature,
+    client_ip="", user_agent="", app_version="",
+):
+    """兑换激活码：一次性核销 + 绑定设备公钥 + 签发 Token（同一事务）。"""
+    validate_app_name(app, app_name)
+    machine_code = check_machine_code(machine_code)
+    public_key = decode_public_key(device_public_key)
+    compact = normalize_activation_code(code)
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM activation_codes WHERE code=?", (compact,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("invalid activation code")
+        if row["app_name"] != app_name:
+            raise ValueError("activation code app mismatch")
+        if row["status"] == "used":
+            raise ValueError("activation code already used")
+        if row["status"] != "issued":
+            raise ValueError("activation code is not redeemable")
+        if row["expires_at"] and _parse_date(row["expires_at"]) < _today():
+            raise ValueError("activation code expired")
+
+        registered = device_key(conn, app_name, machine_code_hash)
+        if registered and registered["revoked"]:
+            raise PermissionError("device credential revoked")
+        if registered and registered["public_key"] != public_key:
+            raise PermissionError("device credential mismatch")
+        verify_proof(
+            conn, app_name=app_name, machine_code=machine_code,
+            machine_code_hash=machine_code_hash, action="activate",
+            challenge=challenge, signature=signature, public_key=public_key,
+        )
+        # 兑换即完成设备登记：后续 validate / latest 需要已登记的公钥
+        conn.execute(
+            """INSERT INTO device_credentials(app_name, machine_code_hash, public_key, revoked)
+               VALUES(?,?,?,0)
+               ON CONFLICT(app_name, machine_code_hash)
+               DO UPDATE SET public_key=excluded.public_key, revoked=0,
+                             updated_at=CURRENT_TIMESTAMP""",
+            (app_name, machine_code_hash, public_key),
+        )
+
+        expires_at = (_today() + dt.timedelta(days=int(row["days"]))).isoformat()
+        issued = _issue_record(
+            app, app_name=app_name, machine_code=machine_code,
+            license_type=row["license_type"], expires_at=expires_at,
+            channel="activation_code", customer_name=row["customer_name"],
+            notes=row["notes"], created_by="activation_code",
+            client_ip=client_ip, user_agent=user_agent, app_version=app_version,
+            conn=conn,
+        )
+        updated = conn.execute(
+            """UPDATE activation_codes
+                  SET status='used', used_at=?, used_machine_code_hash=?, issue_id=?
+                WHERE code=? AND status='issued'""",
+            (_utc_now().isoformat(), machine_code_hash, issued["issue_id"], compact),
+        ).rowcount
+        if updated != 1:
+            raise RuntimeError("activation code already redeemed")
+        write_audit_log(
+            app, action="activate", actor="device", app_name=app_name,
+            machine_code_hash=machine_code_hash, issue_id=issued["issue_id"],
+            client_ip=client_ip, detail="channel=activation_code", conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {**issued, "activation_code": _format_activation_code(compact)}
+
+
+def validate_license(app, *, app_name, machine_code, license_token, challenge, signature, client_ip=""):
+    """设备签名的在线状态核查：返回 active / expired / revoked / unknown 与服务器时间。
+
+    只在令牌签名、产品、机器码都与本机登记一致时才会查询状态；不返回新 Token。
+    """
+    validate_app_name(app, app_name)
+    machine_code = check_machine_code(machine_code)
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        registered = device_key(conn, app_name, machine_code_hash)
+        if not registered or registered["revoked"]:
+            raise PermissionError("device not enrolled or revoked")
+        verify_proof(
+            conn, app_name=app_name, machine_code=machine_code,
+            machine_code_hash=machine_code_hash, action="validate",
+            challenge=challenge, signature=signature,
+            public_key=registered["public_key"],
+        )
+        payload = verify_license_payload(
+            license_token, app.config["PUBLIC_KEY_PATH"], app_name=app_name
+        )
+        if payload.get("app_name") != app_name:
+            raise PermissionError("license app mismatch")
+        if normalize_machine_code(payload.get("machine_code") or "") != machine_code:
+            raise PermissionError("license machine mismatch")
+
+        issue_id = str(payload.get("issue_id") or "")
+        row = conn.execute(
+            """SELECT status, expires_at, license_type, issued_at, channel
+                 FROM license_issues WHERE issue_id=?""",
+            (issue_id,),
+        ).fetchone()
+        if row is None:
+            status = "unknown"
+        elif row["status"] != "active":
+            status = "revoked"
+        elif _parse_date(row["expires_at"]) < _today():
+            status = "expired"
+        else:
+            status = "active"
+
+        write_audit_log(
+            app, action="validate", actor="device", app_name=app_name,
+            machine_code_hash=machine_code_hash, issue_id=issue_id,
+            client_ip=client_ip, detail=status, conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {
+        "status": status,
+        "issue_id": issue_id,
+        "expires_at": row["expires_at"] if row else str(payload.get("expires_at") or ""),
+        "license_type": row["license_type"] if row else str(payload.get("license_type") or ""),
+        "channel": row["channel"] if row else "",
+        "server_time": _utc_now().isoformat() + "Z",
+    }
+
+
+def unbind_device(app, *, app_name, machine_code, created_by="admin_api"):
+    """管理员解绑（换机场景）：吊销该机器全部 active 授权并停用设备凭据。
+
+    与 forget_device 的区别：保留签发历史与设备档案，只做状态停用，可审计可回溯。
+    """
+    validate_app_name(app, app_name)
+    machine_code = check_machine_code(machine_code)
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+
+    conn = connect_db(app.config["DATABASE_PATH"])
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        revoked = conn.execute(
+            """UPDATE license_issues SET status='revoked', updated_at=CURRENT_TIMESTAMP
+                WHERE app_name=? AND machine_code_hash=? AND status='active'""",
+            (app_name, machine_code_hash),
+        ).rowcount
+        credential = conn.execute(
+            """UPDATE device_credentials SET revoked=1, updated_at=CURRENT_TIMESTAMP
+                WHERE app_name=? AND machine_code_hash=? AND revoked=0""",
+            (app_name, machine_code_hash),
+        ).rowcount
+        write_audit_log(
+            app, action="unbind_device", actor=created_by, app_name=app_name,
+            machine_code_hash=machine_code_hash,
+            detail="revoked_issues=%d credential=%d" % (revoked, credential), conn=conn,
+        )
+        conn.commit()
+        return {"revoked_issues": revoked, "credential_revoked": credential > 0}
     except Exception:
         conn.rollback()
         raise

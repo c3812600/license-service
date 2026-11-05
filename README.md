@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/c3812600/license-service/actions/workflows/ci.yml/badge.svg)](https://github.com/c3812600/license-service/actions/workflows/ci.yml)
 
-为 Windows 软件签发机器码绑定的 Ed25519 授权码。当前仓库实现设备公钥登记、签名认证领取续期、试用申请、管理员签发/登记/吊销设备凭据、查询和统计；**不包含**激活码核销、完整许可证吊销同步或换绑。客户端须自行实现机器码计算、本地验签、持久化与防时间回拨；详见 [设计规范](docs/license-design-spec.md)。
+为 Windows 软件签发机器码绑定的 Ed25519 授权码。当前仓库实现设备公钥登记、签名认证领取续期、试用申请、激活码签发与兑换、在线状态核查、管理员签发/登记/吊销/解绑设备凭据、查询和统计；**不包含**完整的自助换机（换到另一台机器）、账户级凭据恢复或已下发离线 Token 的远程撤销。客户端须自行实现机器码计算、本地验签、持久化与防时间回拨；详见 [设计规范](docs/license-design-spec.md)。
 
 ## 文档
 
@@ -29,6 +29,10 @@
 | GET | `/api/v1/devices` | `X-Admin-Token` | 设备列表 + 统计摘要，支持 `q`（机器码/客户/备注模糊搜索）与 `app_name` 过滤 |
 | PATCH | `/api/v1/devices` | `X-Admin-Token` | 编辑设备档案（`customer_name` / `notes`），不动授权 |
 | POST | `/api/v1/devices/forget` | `X-Admin-Token` | **重置设备**：删除该机器码的授权、设备凭证与未用挑战，测试设备可重新试用；不可恢复 |
+| POST | `/api/v1/activation-codes` | `X-Admin-Token` | 批量生成一次性激活码（`days` 必填，`count` 1–100，可设码失效日） |
+| POST | `/api/v1/activate` | 设备签名 | 兑换激活码：同一事务内核销 + 绑定公钥 + 签发 Token（规范 §8.6） |
+| POST | `/api/v1/validate` | 已登记设备签名 | 在线状态核查，返回 `active`/`expired`/`revoked`/`unknown` 与 `server_time`；不签发新 Token（§8.7） |
+| POST | `/api/v1/unbind` | `X-Admin-Token` | **解绑**：吊销该机全部 active 授权并停用设备凭据（换机场景，保留历史）（§8.8） |
 | GET | `/api/v1/stats` | `X-Admin-Token` | 统计数据，不返回完整 Token |
 
 请求和响应均为 JSON：成功 `{"ok":true,"data":{...}}`，失败 `{"ok":false,"error":"..."}`；当前不保证返回 `code`。`/admin` 为管理页，`/admin/stats` 为统计页。未配置管理员 Token 时管理 API 不可用；**没有默认管理员 Token**。

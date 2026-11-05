@@ -9,11 +9,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- `POST /api/v1/activation-codes`：管理员批量生成一次性激活码（16 字符 ≈ 80 bit，可设失效日，1–100 个/次）。
+- `POST /api/v1/activate`：设备签名兑换激活码，同一事务内「核销码 + 绑定设备公钥 + 签发 Token」。
+- `POST /api/v1/validate`：设备签名的在线状态核查，返回 `active`/`expired`/`revoked`/`unknown` 与 `server_time`，
+  不签发新 Token（避免心跳变成无限续期旁路）。
+- `POST /api/v1/unbind`：管理员解绑，吊销该机器全部 active 授权并停用设备凭据，保留历史（换机场景）。
+- schema v2：新增 `activation_codes` 表（纯新增，无数据回填）。
+- 规范附录 K：**Linux 客户端设计**——DMI / machine-id 机器码取值、容器与虚拟机弱指纹判定、
+  `0600` + 可选 keyring 的密钥存储、boot id + 签名状态 + `server_time` 的防回拨、GPG 签包、Linux 测试矩阵。
+
+### Changed
+
+- 规范 §8.2 由「尚未实现的目标接口」改为「落地状态」表，逐项标明已实现 / 部分实现 / 未实现；
+  新增 §8.6 激活码、§8.7 在线校验、§8.8 解绑三节契约（含错误串、限流、审计）。
+- README 接口表补 4 个端点（15 → 19），能力边界不再写「不含激活码核销」。
+
 ### 计划中
 
 - 业务错误码 `code`（当前仅返回 `error` 字符串，客户端只能匹配文本）。
-- `POST /api/v1/activate`、`POST /api/v1/validate`、解绑接口（目标设计见规范 §8.2）。
-- Linux 客户端的机器码 / 密钥存储 / 防回拨方案（当前仅 Windows）。
+- 自助解绑（按 `license_id` 计次）、账户级凭据恢复、自助换机。
+- Linux 客户端的**实现**（附录 K 目前是设计，仓库内无代码）。
 
 ## [0.1.0] - 2026-11-05
 

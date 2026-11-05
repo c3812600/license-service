@@ -14,7 +14,7 @@ from .db import connect_db
 CHALLENGE_TTL_SECONDS = 120
 REGISTER_TTL_SECONDS = 900
 _BASE64URL = re.compile(r"^[A-Za-z0-9_-]+$")
-_ACTIONS = frozenset(("trial", "latest", "register"))
+_ACTIONS = frozenset(("trial", "latest", "register", "validate", "activate"))
 
 
 def check_machine_code(machine_code):

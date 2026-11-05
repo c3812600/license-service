@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def connect_db(db_path):
@@ -23,6 +23,10 @@ def _migrate(conn):
     v0 -> v1：`device_challenges.expires_at`（Unix 秒）改名为 `expires_at_epoch`。
     该列与 `license_issues.expires_at`（日期文本）同名不同义，改名消除歧义；
     挑战行本身是短生命周期数据，改名不改变任何业务语义。
+
+    v1 -> v2：新增 `activation_codes`（激活码）。纯新增表，`init_db` 的
+    `CREATE TABLE IF NOT EXISTS` 已经覆盖，这里只推进版本号，便于后续迁移
+    判断起点。
     """
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
@@ -41,6 +45,10 @@ def _migrate(conn):
             conn.execute(
                 "ALTER TABLE device_challenges RENAME COLUMN expires_at TO expires_at_epoch"
             )
+    if version < 2:
+        # 表结构由 init_db 的 CREATE TABLE IF NOT EXISTS 创建（纯新增，无需回填）
+        pass
+    if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -126,6 +134,25 @@ def init_db(db_path):
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activation_codes (
+                code TEXT PRIMARY KEY,
+                app_name TEXT NOT NULL,
+                license_type TEXT NOT NULL DEFAULT 'paid',
+                days INTEGER NOT NULL,
+                customer_name TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'issued',
+                expires_at TEXT NOT NULL DEFAULT '',
+                issued_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                used_at TEXT NOT NULL DEFAULT '',
+                used_machine_code_hash TEXT NOT NULL DEFAULT '',
+                issue_id TEXT NOT NULL DEFAULT '',
+                created_by TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         # 表结构就位后再迁移旧库，最后统一建索引：
         # 旧库的 device_challenges 仍是 expires_at 列，先改名才能按新列建索引。
         _migrate(conn)
@@ -146,6 +173,12 @@ def init_db(db_path):
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_device_challenges_expiry ON device_challenges(expires_at_epoch)"
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_activation_codes_status
+            ON activation_codes(app_name, status)
+            """
         )
         conn.commit()
     finally:

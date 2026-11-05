@@ -7,7 +7,7 @@
 | 代码基线 | 2026-11-05 `main`（含持证换钥、schema v1 迁移）；实际以 `git log -1` 为准 |
 | 现网状态 | `https://licenses.lonk.vip` **已部署设备签名版**（2026-11-05 核对 `GET /api/v1/health` 返回 `allowed_apps` + `trial_days`）；旧 `GET /latest` 已下线 |
 | 附录基线 | 附录 I / J 与 §8.5「持证换钥」于 2026-11-05 按仓库代码补写 |
-| 文档覆盖 | 客户端部分仅覆盖 **Windows 桌面端**；服务端运行环境为 Linux（附录 J），不含 macOS / 移动端 |
+| 文档覆盖 | 客户端覆盖 **Windows（正文）与 Linux（附录 K）**；服务端运行环境为 Linux（附录 J）；不含 macOS / 移动端 |
 | 适用范围 | Windows 桌面端（Python / C# / C++ / Electron / Go 等） |
 | 对齐基线 | RCC（ControlCommand）、WinPilot、E-Player 三套现网实现 |
 | 授权服务 | `c3812600/license-service`（线上入口：`https://licenses.lonk.vip`） |
@@ -58,6 +58,7 @@
 | 附录 H | Rust Node 产品落地页（现状与待办） |
 | 附录 I | 数据模型与迁移约定 |
 | 附录 J | 服务端部署与运维（Linux） |
+| 附录 K | Linux 客户端设计（机器码 / 密钥存储 / 防回拨） |
 
 ---
 
@@ -709,7 +710,7 @@ User-Agent: {AppName}-License-Client/{version}
 | 能力 | 代码已实现 | 已部署 | 现网可用 | 备注 |
 | --- | --- | --- | --- | --- |
 | `health` / `public-key` | ✅ | ✅ | ✅ | 公钥仅用于构建期核对，不作运行时信任锚 |
-| `devices/challenge` | ✅ | ✅ | ✅ | `trial`/`latest` 120 s，`register` 900 s |
+| `devices/challenge` | ✅ | ✅ | ✅ | 一次性挑战，TTL 120 s（`register` 900 s） |
 | `trial/apply` | ✅ | ✅ | ✅ | 需设备签名，自助登记公钥 |
 | `licenses/latest`（POST） | ✅ | ✅ | ✅ | 旧无认证 GET 已下线（405） |
 | `devices/register`（管理员路径） | ✅ | ✅ | ✅ | 管理台登记/轮换在用 |
@@ -717,8 +718,11 @@ User-Agent: {AppName}-License-Client/{version}
 | `devices/revoke` / `licenses/renew` / `offline-issue` | ✅ | ✅ | ✅ | 管理台在用 |
 | `licenses/query` / `licenses/active_key` | ✅ | ✅ | ✅ | 管理台在用 |
 | `devices`（GET/PATCH）/ `devices/forget` | ✅ | ✅ | ✅ | 管理台在用 |
+| `activation-codes` / `activate`（激活码） | ✅ | ❌ | ❌ | 本次新增，待部署；见 §8.6 |
+| `validate`（在线状态核查） | ✅ | ❌ | ❌ | 本次新增，待部署；见 §8.7 |
+| `unbind`（管理员解绑） | ✅ | ❌ | ❌ | 本次新增，待部署；见 §8.8 |
 | `/admin`、`/admin/stats` | ✅ | ✅ | ✅ | 与 API 同源发布 |
-| `activate` / `validate` / `unbind`（目标接口） | ❌ | ❌ | ❌ | 见 §8.2，不阻塞现有闭环 |
+| 自助解绑（按 `license_id` 计次）、账户级凭据恢复 | ❌ | ❌ | ❌ | 见 §8.2，不阻塞现有闭环 |
 
 > 「已部署」只表示该路径在现网可用，**不代表与本地 HEAD 逐行同源**；发布前仍须用 `git log -1` 记录部署 commit，并复核 `health` 输出与本文档的差异。
 
@@ -728,7 +732,7 @@ User-Agent: {AppName}-License-Client/{version}
 **设备签名契约（本仓库实现，需客户端升级；与发行方 Token 的 Ed25519 密钥对完全独立）：**
 
 1. 客户端每个产品/机器生成 Ed25519 设备密钥对，私钥仅留本机并用 DPAPI 保护；首次试用自助登记，已有试用/付费记录未登记者必须管理员人工核验并登记。首次自助登记无法证明真实硬件身份，存在已知机器码被抢先占用的残余风险。
-2. 客户端 `POST /api/v1/devices/challenge` 发送 JSON `{"app_name":"ControlCommand","machine_code":"本机机器码","action":"trial"}`（续期取回用 `latest`，管理员登记用 `register`）。返回 `data.challenge`（43 位无填充 base64url）和 `expires_in`；试用/领取 120 秒，人工登记 900 秒。机器码去空格转大写后限 8-128 位字母/数字/冒号/下划线/连字符，**自助试用还要求 64 位十六进制 SHA-256 码**。
+2. 客户端 `POST /api/v1/devices/challenge` 发送 JSON `{"app_name":"ControlCommand","machine_code":"本机机器码","action":"trial"}`（续期取回用 `latest`，管理员登记用 `register`，状态核查用 `validate`，兑换激活码用 `activate`）。返回 `data.challenge`（43 位无填充 base64url）和 `expires_in`；除 `register` 为 900 秒外，其余动作均 120 秒。机器码去空格转大写后限 8-128 位字母/数字/冒号/下划线/连字符，**自助试用还要求 64 位十六进制 SHA-256 码**。
 3. 对以下**无尾部换行**的 UTF-8 字节签名，每行以单个 LF (`\n`) 分隔；`device_public_key` 是 32 字节原始公钥的无填充 base64url（43 位），`signature` 是 64 字节签名的无填充 base64url（86 位）。挑战绑定动作、产品、机器，只能成功使用一次：
 
 ```text
@@ -746,26 +750,30 @@ license-service/device/v1
 
 **本仓库试用规则**：建议客户端显式发送 `trial_days`（§6.3.1）；产品上限由 `LICENSE_SERVICE_TRIAL_DAYS_MAP`（JSON：`{"<app_name>": 天数}`）指定，未配置用全局 `LICENSE_SERVICE_TRIAL_DAYS`（代码与示例配置默认 30）。未传/非法时取产品上限，有效正整数钳制到上限。新签试用以服务端 **UTC 日期**计算首次到期日；响应 `data.trial_days` 是首次实际发放天数。并发请求在数据库事务中串行处理，重复领取新签 Token 但沿用**首次到期日**，已过期后申请返回 409 `trial expired`。代码及示例配置默认允许 `ControlCommand`、`E-Player`、`WinPilot`、`iCMS`、`rust-node`，生产可通过 `LICENSE_SERVICE_ALLOWED_APPS` 收窄。此规则是代码与测试结论，公网还须用安全测试环境单独联调。
 
-### 2. 尚未实现的目标标准接口
+### 2. 目标接口的落地状态
 
-| 动作 | 方法与路径 | 请求 | 响应 `data` | 说明 |
-| --- | --- | --- | --- | --- |
-| 激活 | `POST /api/v1/activate` | `{"key","app_name","machine_code","app_version","fingerprint_ver"}` | `license_token`、`license_id`、`expires_at` | 核销激活码并绑定 |
-| 设备换绑/完整凭据恢复 | 接口待定 | 原设备证明或人工审批与新密钥 | 新设备登记状态 | 换机或账户级凭据恢复仍未实现；**同一机器换公钥**已支持「持证换钥」自助完成（§8.5） |
-| 校验/心跳 | `POST /api/v1/validate` | `license_token` 或 `license_id` + `machine_code`；设备凭据/管理凭据认证 | `status`: `active`/`expired`/`revoked`/`grace`，`server_time` | 可静默周期调用；不能把机器码当认证 |
-| 离线申请 | `POST /api/v1/offline-license` | `{"key","app_name","machine_code","fingerprint_ver"}` | `license_token`（同格式） | 供管理台代发 |
-| 解绑 | `POST /api/v1/unbind` | `{"license_id","machine_code"}` + 管理员/经授权的设备凭据 | `ok` | 校验解绑权限、次数、审计；仅 ID/机器码不能解绑 |
-| 吊销查询 | `POST /api/v1/revoked` | `{"license_id"}` + 经授权的凭据 | `revoked`: bool | 可并入 validate，防止枚举与状态泄露 |
+早期版本把激活 / 校验 / 解绑列为「目标设计」。其中三项已于 2026-11-05 实现（尚未部署），其余能力仍待产品决策：
 
-**与现网映射：**
+| 能力 | 状态 | 实现方式 |
+| --- | --- | --- |
+| 激活码兑换 | ✅ 已实现（待部署） | `POST /api/v1/activate`：设备签名 + 一次性核销，签发 Token 并绑定公钥（§8.6） |
+| 在线校验 / 心跳 | ✅ 已实现（待部署） | `POST /api/v1/validate`：设备签名，返回 `active`/`expired`/`revoked`/`unknown` + `server_time`（§8.7） |
+| 解绑（管理员） | ✅ 已实现（待部署） | `POST /api/v1/unbind`：吊销该机器全部 active 授权 + 停用设备凭据，保留历史记录（§8.8） |
+| 设备换绑（同一机器换公钥） | ✅ 已实现 | 「持证换钥」，见 §8.5 |
+| 设备换绑（换到另一台机器） | ⚠️ 人工流程 | `unbind` 旧机 + `renew` / `offline-issue` 新机；无自助换机 |
+| 自助解绑（按 `license_id` 计次） | ❌ 未实现 | 需要稳定的 `license_id` 与解绑配额模型，当前 `issue_id` 只是签发记录 ID |
+| 账户级凭据恢复 | ❌ 未实现 | 需要账户体系，超出当前「一机一授权」模型 |
+| 客户端自助离线申请 | ❌ 未实现 | 目前由管理台 `offline-issue` 人工签发 |
+| 吊销查询（独立接口） | ✅ 由 validate 覆盖 | `status=revoked` 即吊销，不单独开接口，避免枚举面 |
 
-| 目标接口 | 现网替代 |
-| --- | --- |
-| activate | 暂无统一接口；试用走 `trial/apply`，正式授权目前签发后手工/脚本交付 Token |
-| validate | 无；客户端以本地验签为准，可调用 `public-key` 做连通性探测 |
-| offline-license | 无；管理台人工签发 |
+**与早期目标表的差异（需要产品确认的取舍）：**
 
-> 上表为**目标设计，不代表现网已实现**。设备公钥登记与挑战式取回已在服务端实现**并已部署**（2026-11-05 核对，见 §8.1 三态表），但真实 Windows 客户端的联调仍需按本规范完成；凭据恢复分两种：仍持有效授权码时可用「持证换钥」自助完成（§8.5），否则只能管理员人工核验登记。`issue_id` 与目标 `license_id` 尚无稳定映射，不能将联网取回能力误写为完整吊销/换绑能力。
+1. **`activate` 的语义定为「兑换激活码」**：管理员批量生成高熵码（16 字符 ≈ 80 bit），客户端用设备签名兑换，服务端在同一事务内完成「核销码 + 绑定公钥 + 签发 Token」。不提供「先签发再核销」的双阶段模型，也不支持一个码多次兑换。
+2. **`validate` 只返回状态，不返回新 Token**：避免把心跳做成「无限续期」的旁路；续期仍需 `renew` 或 `latest`。
+3. **`unbind` 只做管理员版**：自助解绑需要配额与 `license_id` 模型，先不做，避免「谁能解绑别人机器」的漏洞。
+4. **`license_id` 仍未引入**：现有 `issue_id` 是签发记录 ID，语义不同；文档里出现 `license_id` 的地方仍属目标。
+
+> 三项新接口**已实现但尚未部署**（2026-11-05），三态见 §8.1。部署前按附录 J 的备份流程操作；旧客户端不调用这些接口即可，向后兼容。
 
 ### 3. 网络容错
 
@@ -849,6 +857,123 @@ license-service/device/v1
 - 换钥过程中**不要清空本地授权**，否则连凭证都丢了；
 - 换钥失败要退避；命中 24 小时 3 次上限时提示联系管理员，不要无限重试；
 - 换钥成功后缓存新公钥指纹，避免同一漂移反复触发。
+
+### 6. 激活码兑换（activate）
+
+面向「离线销售 / 渠道分发」：管理员批量生成一次性激活码，用户拿到码后在客户端兑换，服务端当场签发 Token 并绑定本机公钥。
+
+**A. 管理员生成激活码**
+
+```http
+POST /api/v1/activation-codes
+X-Admin-Token: <管理员令牌>
+Content-Type: application/json
+
+{"app_name":"ControlCommand","days":365,"count":10,"license_type":"paid",
+ "customer_name":"某某公司","notes":"渠道 A","expires_at":"2026-12-31"}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `app_name` | 是 | 必须是允许的产品 |
+| `days` | 是 | 兑换后签发的授权时长，1–3650 天（按 UTC 日期从兑换日算） |
+| `count` | 否 | 一次生成数量，1–100，默认 1 |
+| `license_type` | 否 | `paid`（默认）/ `trial` |
+| `customer_name` / `notes` | 否 | 写入新签发的授权与设备档案 |
+| `expires_at` | 否 | **激活码本身**的失效日；不填则长期有效 |
+
+响应 `data.codes` 为 `XXXX-XXXX-XXXX-XXXX` 形式的码列表（16 字符 ≈ 80 bit，字符集去掉 `I/L/O/0/1`，兑换时忽略大小写与分隔符）。
+
+**B. 客户端兑换**
+
+```http
+POST /api/v1/activate
+Content-Type: application/json
+
+{"app_name":"ControlCommand","machine_code":"本机机器码","code":"7K3M-9XQ2-AB4N-Z8TD",
+ "device_public_key":"43 位无填充 base64url","challenge":"activate 挑战","signature":"86 位签名"}
+```
+
+- 挑战由 `POST /api/v1/devices/challenge` 获取，`action=activate`，TTL 120 秒；
+- 服务端在同一事务内完成：校验设备证明 → 核销码 → 签发 Token → 写入设备档案；
+- 成功返回与 `trial/apply` 相同的字段（`license_key`、`issue_id`、`expires_at`、`channel="activation_code"`），客户端**必须本地验签后再落盘**。
+
+**C. 失败与限流**
+
+| 情况 | 结果 |
+| --- | --- |
+| 码不存在 / 格式非法 | 400 `invalid activation code` |
+| 码的产品与请求不一致 | 400 `activation code app mismatch` |
+| 码已被兑换 | 400 `activation code already used` |
+| 码被停用 | 400 `activation code is not redeemable` |
+| 码过了失效日 | 400 `activation code expired` |
+| 设备凭据被停用 / 公钥与登记不一致 | 403 `device credential revoked` / `device credential mismatch` |
+| 设备签名挑战无效 | 403 `invalid device proof` / `invalid or expired challenge` |
+| 频率 | 生成 20 次/分钟/IP；兑换 5 次/分钟/IP |
+
+**D. 安全说明**：码是「持有即可兑换」的凭证，**不绑定机器**；一旦泄露，先兑换者得利。因此码必须高熵、一次一码、可设失效日，并按渠道记录发放（`created_by` / `notes`）。审计动作：`issue_activation_codes`（生成）、`activate`（兑换）。
+
+### 7. 在线状态核查（validate）
+
+客户端拿到授权后，可周期调用（建议默认 6 小时，失败指数退避）确认是否仍有效，**只读状态，不签发新 Token**。
+
+```http
+POST /api/v1/validate
+Content-Type: application/json
+
+{"app_name":"ControlCommand","machine_code":"本机机器码",
+ "license_token":"<本地授权码>","challenge":"validate 挑战","signature":"86 位签名"}
+```
+
+响应：
+
+```json
+{"ok":true,"data":{
+  "status":"active",
+  "issue_id":"f17d94af…",
+  "expires_at":"2027-06-30",
+  "license_type":"paid",
+  "channel":"admin_renew",
+  "server_time":"2026-11-05T02:23:17Z"
+}}
+```
+
+| `status` | 含义 | 客户端处理 |
+| --- | --- | --- |
+| `active` | 有效 | 正常使用；可用 `server_time` 校正本地时钟 |
+| `expired` | 已过期 | 按第七章策略提醒/降级；不得因网络错误判为过期 |
+| `revoked` | 已吊销或被降期替换 | 强提示联系供应商；写本地标记避免反复请求 |
+| `unknown` | 令牌签名有效但签发记录已删除（如 `devices/forget`） | 视为不可信，引导重新激活 |
+
+- 认证：设备签名 + 本地登记的公钥；未登记或凭据被停用返回 403 `device not enrolled or revoked`；
+- 令牌里的产品 / 机器码必须与请求一致，否则 403 `license app mismatch` / `license machine mismatch`；
+- 限流 20 次/分钟/IP；审计动作 `validate`，`detail` 记录状态；
+- **不能**用它延长授权：`expires_at` 以服务端记录为准，心跳只回报。
+
+### 8. 解绑（unbind，管理员）
+
+换机场景：旧机器不再使用，需要让同一份授权转到新机器。
+
+```http
+POST /api/v1/unbind
+X-Admin-Token: <管理员令牌>
+Content-Type: application/json
+
+{"app_name":"ControlCommand","machine_code":"旧机器码"}
+```
+
+- 服务端把该机器**全部 `active` 授权置为 `revoked`**，并停用设备凭据（`revoked=1`）；
+- 返回 `{"revoked_issues":1,"credential_revoked":true}`；重复调用返回 0 / false（幂等）；
+- 保留签发历史与设备档案，可审计、可追溯；审计动作 `unbind_device`；
+- 之后在新机器上用 `licenses/renew` 或 `offline-issue` 签发即可，旧机器的 `latest` 将返回 403。
+
+**三个「停用/删除」接口的区别（容易混淆，务必区分）：**
+
+| 接口 | 作用范围 | 可恢复 | 典型场景 |
+| --- | --- | --- | --- |
+| `devices/revoke` | 只停用设备公钥（联网领取能力） | 可再登记恢复 | 怀疑设备被盗用，但授权本身仍有效 |
+| `unbind` | 停用设备公钥 **+ 吊销该机全部 active 授权** | 不可恢复（需重签） | 换机、退租 |
+| `devices/forget` | **物理删除**授权、凭据、未用挑战、设备档案 | 不可恢复 | 测试设备重置、重新领取试用 |
 
 ---
 
@@ -945,6 +1070,9 @@ ensure_license(silent=False) -> bool   # 启动入口
 | 32 | 安装/升级、无管理员权限、卸载重装 | 程序目录只读可运行；授权/工作流在用户数据目录且不被升级覆盖 |
 | 33 | 未登录直连 WebSocket、跨站请求、授权到期期间持续连接 | 握手及连接存续均受门禁控制，不得执行注入等业务操作 |
 | 34 | 持证换钥：持有效授权码换绑新公钥（§8.5） | 换绑成功、旧公钥立即失效；同一机器 24h 内第 4 次返回 403 `rotation rate limit exceeded, retry tomorrow`；被吊销设备不得自愈；离线 Token 同样可用于换钥 |
+| 35 | 激活码：生成 → 兑换 → 二次兑换（§8.6） | 首次签发成功且 `channel=activation_code`；同码二次兑换 400 `activation code already used`；跨产品兑换 400 `activation code app mismatch` |
+| 36 | 在线校验：active / expired / revoked（§8.7） | 状态依次为 `active` / `expired` / `revoked`；未登记设备 403 `device not enrolled or revoked`；他机 Token 403 `license machine mismatch` |
+| 37 | 解绑：旧机停用 → 新机重签（§8.8） | `unbind` 后旧机 `latest` 与 `validate` 均 403；重复解绑幂等（0 / false）；新机 `renew` 后可正常领取 |
 
 ---
 
@@ -1217,15 +1345,17 @@ ensure_license(silent: bool) -> bool
 | `device_registry` | 设备档案（管理台列表与统计口径） | 主键 `(app_name, machine_code_hash)`；`idx_device_registry_last_seen(last_seen)` |
 | `device_credentials` | 设备 Ed25519 公钥与吊销状态 | 主键 `(app_name, machine_code_hash)` |
 | `device_challenges` | 一次性挑战，短生命周期（120 s / 900 s），用完即删 | 主键 `challenge`（43 字符 base64url）；`idx_device_challenges_expiry(expires_at_epoch)` |
-| `audit_logs` | 审计流水（签发、试用、换钥、重置、吊销） | 主键 `id` |
+| `activation_codes` | 一次性激活码（管理员生成、客户端兑换） | 主键 `code`（16 字符规范化后存库）；`idx_activation_codes_status(app_name, status)` |
+| `audit_logs` | 审计流水（签发、试用、换钥、激活、校验、解绑、重置） | 主键 `id` |
 
 **关键列：**
 
 - `license_issues`：`issue_id`、`app_name`、`machine_code_hash`、`machine_code_last4`（列表展示用）、`license_type`（`paid` / `trial`）、`channel`、`status`、`issued_at`、`expires_at`、`previous_issue_id`（`supersede` 链路）、`created_by`、`client_ip`、`user_agent`、`app_version`、`license_token`（完整 Token）、`license_token_hash`、`created_at`、`updated_at`。
 - `device_registry`：`machine_code`（**明文**，仅供管理台展示与人工核验；查询一律用 `machine_code_hash`）、`customer_name`、`notes`、`first_seen`、`last_seen`。
 - `device_credentials`：`public_key`（32 字节原始 Ed25519 公钥，BLOB）、`revoked`（0/1，停用后不再允许联网领取，但**不撤销已下发的离线 Token**）。
-- `device_challenges`：`action`（`trial` / `latest` / `register`）、`expires_at_epoch`。
-- `audit_logs`：`action`（`trial_issue` / `license_renew` / `device_rotate` / `forget_machine` 等，**历史值不可改名**）、`actor`、`app_name`、`machine_code_hash`、`issue_id`、`client_ip`、`detail`。
+- `device_challenges`：`action`（`trial` / `latest` / `register` / `validate` / `activate`）、`expires_at_epoch`。
+- `activation_codes`：`code`（规范化 16 字符，**明文存储**——需按码查找；码本身 80 bit 高熵）、`app_name`、`license_type`、`days`（兑换后签发时长）、`status`（`issued` / `used` / `revoked`）、`expires_at`（码自身失效日，空=长期）、`used_at`、`used_machine_code_hash`、`issue_id`（兑换后生成的授权）、`created_by`。
+- `audit_logs`：`action`（`trial_issue` / `license_renew` / `device_rotate` / `activate` / `validate` / `unbind_device` / `forget_machine` 等，**历史值不可改名**）、`actor`、`app_name`、`machine_code_hash`、`issue_id`、`client_ip`、`detail`。
 
 ### 2. 时间字段的三套语义（不可混用）
 
@@ -1239,25 +1369,28 @@ ensure_license(silent: bool) -> bool
 
 ### 3. 迁移机制（v1 起）
 
-- **版本源**：`PRAGMA user_version`，与 `db.SCHEMA_VERSION` 对应；当前 `1`。
+- **版本源**：`PRAGMA user_version`，与 `db.SCHEMA_VERSION` 对应；当前 `2`。
 - **执行路径**：`create_app()` → `init_db()`：建表（`IF NOT EXISTS`）→ `_migrate()` → 建索引 → 提交。顺序不能调换——旧库的表已存在，必须先改名再按新列名建索引。
 - **幂等**：每次启动都跑，可重复执行；老库只补差异，新库直接落到最新结构。
 - **只前向**：库的 `user_version` 高于代码的 `SCHEMA_VERSION` 时**拒绝启动**（`RuntimeError`），避免旧代码写新库。
 - **环境要求**：迁移用 `ALTER TABLE ... RENAME COLUMN`，需 **SQLite ≥ 3.25**（Python 3.8+ 自带版本满足）。
 - **v1 内容**：`device_challenges.expires_at` → `expires_at_epoch`，数据原样保留，旧索引由 SQLite 自动改写。
+- **v2 内容**：新增 `activation_codes` 表（纯新增，由 `CREATE TABLE IF NOT EXISTS` 落地，无数据回填）。
 
 ### 4. 升级与回滚
 
 升级前先热备（`scripts/backup_db.py`，见附录 J），迁移本身不需要停机，但备份必须做。
 
-回滚时**代码与库要一起退**，否则列名对不上：
+回滚时**代码与库要一起退**，否则列名对不上；`user_version` 高于代码版本会直接拒绝启动：
 
 ```sql
+-- v2 -> v1（回到只支持到 schema v1 的代码）
 ALTER TABLE device_challenges RENAME COLUMN expires_at_epoch TO expires_at;
-PRAGMA user_version = 0;
+PRAGMA user_version = 1;
+-- 需要再退到 v0 时：PRAGMA user_version = 0;
 ```
 
-`device_challenges` 是短生命周期数据，最坏影响是让客户端重新取一次挑战，不会影响已签发授权。
+`activation_codes` 表可以保留（v1 代码不会读它），也可以 `DROP TABLE activation_codes` 清掉。`device_challenges` 是短生命周期数据，最坏影响是让客户端重新取一次挑战，不会影响已签发授权。
 
 ### 5. 已知缺口
 
@@ -1334,6 +1467,122 @@ python scripts/backup_db.py /path/db /path/out    # 显式指定源目录与备�
 - 没有日志轮转与监控告警配置；
 - 面板生成的 gunicorn 参数（worker 数、超时）不可见，建议至少记录一份到运维笔记；
 - 本附录描述的是「仓库里有什么」，**不代表现网已按此部署**——现网状态见 §8 与 README 的部署说明。
+
+---
+
+## 附录 K  Linux 客户端设计
+
+本文档正文以 Windows 为基线（WMI 取硬件、DPAPI 存密钥、注册表存状态）。Linux 没有这些设施，**不能把 Windows 方案照搬**；本附录给出等价设计，接口层（§8）与 Token 格式完全复用，差异只在「怎么算机器码、密钥放哪、怎么防回拨」。
+
+### 1. 与 Windows 的关键差异
+
+| 能力 | Windows 做法 | Linux 对应做法 |
+| --- | --- | --- |
+| 硬件标识 | WMI `Win32_ComputerSystemProduct.UUID` / 主板序列号 | `/sys/class/dmi/id/product_uuid`、`board_serial`（只读，无需 root） |
+| 系统标识 | 无直接对应 | `/etc/machine-id`（systemd 稳定 ID，但容器内会变） |
+| 密钥保护 | DPAPI（绑定用户 + 机器） | 文件 `0600` + 属主校验；可选 libsecret（Secret Service） |
+| 状态存储 | `HKCU` 注册表 | `$XDG_DATA_HOME` 下的状态文件 |
+| 防回拨 | 注册表签名状态 | 签名状态文件 + boot id + 单调时钟 |
+| 安装包签名 | Authenticode | GPG 签 deb/rpm，AppImage 附 SHA-256 与签名 |
+
+### 2. 机器码（Linux 版）
+
+**采集顺序（与 Windows 同级思想：先稳定、后兜底）：**
+
+1. **DMI 主路径**：`/sys/class/dmi/id/product_uuid` + `/sys/class/dmi/id/board_serial`（去除占位值与全零）；
+2. **系统主路径**：`/etc/machine-id`（32 hex）；
+3. **存储兜底**：根文件系统 UUID（`findmnt -no UUID /` 或 `/etc/fstab`）、首块非 `loop`/`ram` 磁盘序列号（`/sys/block/*/device/serial`）。
+
+**禁止参与机器码**：网卡 MAC（可改）、hostname、容器 overlay 层 ID、`/proc/sys/kernel/random/boot_id`（每次启动都变）、可移动卷序列号。
+
+```text
+function linux_machine_code():
+    tier1 = filter_invalid([
+        read("/sys/class/dmi/id/product_uuid"),
+        read("/sys/class/dmi/id/board_serial"),
+    ])
+    tier2 = filter_invalid([
+        read("/etc/machine-id"),
+        root_fs_uuid(),
+        first_disk_serial(),
+    ])
+    raw = join("|", tier1 if tier1 else tier2)
+    if raw is empty: return WEAK_MARKER          # 路径 3/4，禁止自动签发付费授权
+    return uppercase(sha256(raw))               # 64 位十六进制，与 Windows 同语义
+```
+
+**虚拟化 / 容器识别**（决定是否走弱指纹）：
+
+- 容器：存在 `/.dockerenv`，或 `/proc/1/cgroup` 含 `docker|kubepods|containerd`；
+- 虚拟机：`systemd-detect-virt --vm` 非 `none`，或 DMI `product_name` 为 `KVM|VMware|VirtualBox|QEMU`。
+
+命中时不禁止运行，但该机器码标记为**弱指纹**：不自动签发付费授权、不参与「一机一次试用」的自动判定，需要管理员人工核验（与 Windows §2 路径 3/4 的规则一致）。
+
+### 3. 密钥与状态存储
+
+无 DPAPI 等价物，采用「文件 + 权限 + 可选 keyring」：
+
+| 对象 | 位置 | 要求 |
+| --- | --- | --- |
+| 设备私钥 | `${XDG_DATA_HOME:-~/.local/share}/<App>/device.key` | `0600`，属主必须是当前用户 |
+| 授权与状态 | 同目录 `license.json` / `state.json` | `0600`，写入用临时文件 + `rename` 原子替换 |
+| 可选 | libsecret / Secret Service | 优先存 keyring，文件仅存索引 |
+
+**启动自检（必须做）**：`stat` 校验属主 `uid == getuid()`、`mode & 0o077 == 0`、父目录非 `world-writable`；不满足时**拒绝加载旧密钥**（视为可能被替换），重新生成并走「持证换钥」（§8.5）或人工登记。
+
+**威胁模型要写进产品说明**：同机其他用户与粗心拷贝可被挡住；**root 始终可以读**；磁盘未加密时，拔盘即可离线读取。需要更强保护时使用全盘加密或 TPM（`systemd-cryptenroll`）。
+
+### 4. 防时间回拨
+
+单一时间源在 Linux 上不可信（`date -s`、NTP 回退、容器时钟漂移都可能）。组合三件事：
+
+1. **进程内单调时钟**：用 `CLOCK_BOOTTIME`（含休眠）做区间度量，不依赖系统时间；
+2. **签名状态文件**：`{last_seen_epoch, boot_id, counter}` 用设备私钥签名，启动时验签后再比较；
+3. **联网校正**：`POST /api/v1/validate` 返回的 `server_time`（§8.7）作为外部锚点，只在成功校验后接受。
+
+判定：
+
+```text
+if now + TOLERANCE < state.last_seen_epoch            -> TIME_ROLLBACK
+if boot_id == state.boot_id and counter < state.counter -> TIME_ROLLBACK
+if server_time < state.last_seen_epoch - TOLERANCE     -> 以 server_time 为准并告警
+```
+
+`TOLERANCE` 建议 300 秒（与 Windows 实现一致）。命中 `TIME_ROLLBACK` 时按 §5 状态机处理：不静默放行，也不直接删除授权。
+
+### 5. 网络协议
+
+完全复用 §8：设备签名挑战（`trial` / `latest` / `register` / `validate` / `activate`）、Token 格式、错误串、限流约定都不变。Linux 侧注意：
+
+- `User-Agent` 统一为 `{AppName}-License-Client/{version} (linux)`，便于服务端审计区分；
+- 证书信任用系统 CA（`/etc/ssl/certs`），**不要**内置私有 CA 覆盖校验；
+- 代理走 `HTTPS_PROXY` 环境变量，不在代码里硬编码。
+
+### 6. 打包与分发
+
+- 按发行版提供 `deb` / `rpm` / AppImage；授权与状态一律放 `$XDG_DATA_HOME`，**升级不得覆盖**；
+- 包体积小、无 root 运行：安装到 `/opt` 或 `/usr/lib`，运行时不写程序目录；
+- 发布签名：deb/rpm 用 GPG 签名（`dpkg-sig` / `rpm --addsign`），AppImage 提供 `.sha256` 与分离签名；
+- 不把发行私钥、`ADMIN_TOKEN`、机器码盐打进任何包（与 Windows 附录 F 的要求一致）。
+
+### 7. Linux 测试矩阵（在 §十二 基础上追加）
+
+| # | 用例 | 期望 |
+| --- | --- | --- |
+| L1 | 插入/拔出 U 盘、挂载新盘 | 机器码不变 |
+| L2 | 切换到另一个桌面用户 | 授权隔离，互不可见 |
+| L3 | 手动 `date -s` 改到过去/未来 | 触发 `TIME_ROLLBACK`，不静默放行 |
+| L4 | 容器内运行（docker/podman） | 标记弱指纹，不自动签发付费授权 |
+| L5 | 同机另一用户把 `device.key` 改成 `0644` | 启动拒绝加载并提示，不静默使用 |
+| L6 | 复制整个 `$XDG_DATA_HOME` 到另一台机器 | 机器码不匹配，验签失败 |
+| L7 | 无 systemd 的发行版（如 Alpine/OpenRC） | 回退到 `/etc/machine-id` 或 DMI 路径，不崩溃 |
+| L8 | 升级包覆盖安装 | 授权与状态保留 |
+
+### 8. 待办
+
+- 本附录是**设计**，仓库内没有 Linux 客户端实现；落地时建议按 §10 的模块划分提供 `machine_id_linux.py` 与 `anti_rollback_linux.py`；
+- TPM 绑定（`systemd-cryptenroll` / `tpm2-tss`）尚未纳入设计；
+- 发行版兼容矩阵（glibc 版本、无 systemd 发行版）需在真实机器上补测。
 
 ---
 
