@@ -19,6 +19,8 @@ python -m unittest tests.test_migration -v     # 只跑 schema 迁移测试
 
 首次启动会自动生成 `keys/ed25519-{private,public}.pem`；**已有环境迁移时不要重新生成**，私钥、公钥、数据库、机器码哈希盐必须一起备份与恢复。
 
+CI（`.github/workflows/ci.yml`）在 push / PR 时跑同一套测试（Python 3.10 与 3.12）外加文档链接检查（`python scripts/check_docs.py .`）；本地跑通即可预期 CI 绿。
+
 ## 目录结构
 
 ```
@@ -33,6 +35,8 @@ license_service/
   static/                     # admin.html / stats.html（与 docs 里的 demo 共用一套设计 token）
 tests/                        # test_service.py（业务）、test_migration.py（schema）
 scripts/backup_db.py          # VACUUM INTO 热备
+scripts/check_docs.py         # 文档内部链接检查（CI 的 docs 任务调用）
+.github/workflows/ci.yml      # CI：测试（Python 3.10 / 3.12）+ 文档链接
 docs/license-design-spec.md   # 唯一权威规范（含数据模型附录 I、运维附录 J）
 ```
 
@@ -69,7 +73,7 @@ docs/license-design-spec.md   # 唯一权威规范（含数据模型附录 I、�
 - 业务错误码 `code` 未落地，客户端只能匹配错误字符串；
 - 无反向代理/HTTPS/监控配置（属面板与宿主机）；
 - Linux 客户端设计缺失（规范只覆盖 Windows 客户端的机器码、DPAPI、防回拨）；
-- 无 CI、无前端自动化测试。
+- 无前端自动化测试（UI 靠人工开页面看）。
 
 ## 提交约定
 

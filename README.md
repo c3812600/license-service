@@ -1,5 +1,7 @@
 # License Service
 
+[![CI](https://github.com/c3812600/license-service/actions/workflows/ci.yml/badge.svg)](https://github.com/c3812600/license-service/actions/workflows/ci.yml)
+
 为 Windows 软件签发机器码绑定的 Ed25519 授权码。当前仓库实现设备公钥登记、签名认证领取续期、试用申请、管理员签发/登记/吊销设备凭据、查询和统计；**不包含**激活码核销、完整许可证吊销同步或换绑。客户端须自行实现机器码计算、本地验签、持久化与防时间回拨；详见 [设计规范](docs/license-design-spec.md)。
 
 ## 文档
@@ -72,4 +74,4 @@ Token 格式为 `<产品前缀>.<base64url(payload)>.<base64url(Ed25519签名)>`
 
 ## 测试
 
-`python -m unittest discover -s tests -v`。测试使用临时数据库和临时密钥，不访问公网，也不会修改生产授权。
+`python -m unittest discover -s tests -v`。测试使用临时数据库和临时密钥，不访问公网，也不会修改生产授权。CI（`.github/workflows/ci.yml`）在 push / PR 时用 Python 3.10 与 3.12 跑同一套测试，并校验文档内部链接（`python scripts/check_docs.py .`）。
