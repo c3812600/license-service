@@ -11,20 +11,40 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import Config
 from .crypto import ensure_keypair
-from .db import init_db
+from .db import SCHEMA_VERSION, init_db
 from .device_auth import create_challenge
 from .service import (
     fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_device, query_licenses, register_device, renew_license, revoke_device, validate_app_name, list_devices, update_device_meta, touch_device, fetch_active_license_key,
-    create_activation_codes, activate_with_code, validate_license, unbind_device,
+    create_activation_codes, activate_with_code, validate_license, unbind_device, unbind_device_self, transfer_license,
+    create_recovery_codes, recover_with_code,
 )
 
 
-def _error(message, status_code=400):
-    return jsonify({"ok": False, "error": message}), status_code
+_ERROR_CODES_BY_STATUS = {
+    400: "INVALID_INPUT",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    405: "METHOD_NOT_ALLOWED",
+    409: "CONFLICT",
+    413: "INVALID_INPUT",
+    429: "RATE_LIMITED",
+    500: "INTERNAL",
+}
 
 
-# 生产拓扑：cloudflared 容器（172.17.0.3）→ 10.0.0.228:8765，代理头只信任本机/容器网桥来源；
-# 直连 8765 的客户端伪造 X-Forwarded-For 会被剥掉，审计 IP 不可伪造（体检 R2）。
+def _error(message, status_code=400, code=None):
+    """错误信封：{"ok":false,"error":"...","code":"..."}。
+    code 缺省按状态码推导；异常自带 code（见 errors.py）时优先用之。"""
+    return jsonify({
+        "ok": False,
+        "error": message,
+        "code": code or _ERROR_CODES_BY_STATUS.get(status_code, "INTERNAL"),
+    }), status_code
+
+
+# 可信代理来源仅本机/容器网桥（_TRUSTED_PROXY_NETS）；其余来源的代理头一律剥掉，
+# 直连服务端口的伪造 X-Forwarded-For 不被采纳，审计 IP 不可伪造（体检 R2）。
 _TRUSTED_PROXY_NETS = tuple(
     ipaddress.ip_network(n) for n in ("127.0.0.0/8", "::1/128", "172.16.0.0/12")
 )
@@ -69,6 +89,8 @@ _RATE_LIMITS = {
     "/api/v1/activation-codes": (20, 60),
     "/api/v1/activate": (5, 60),
     "/api/v1/validate": (20, 60),
+    "/api/v1/licenses/transfer": (5, 60),
+    "/api/v1/licenses/recover": (5, 60),
     "/api/v1/unbind": (10, 60),
     "/api/v1/devices/challenge": (30, 60),
     "/api/v1/trial/apply": (5, 60),
@@ -152,6 +174,7 @@ def create_app():
                 "service": "rcc-license-service",
                 "allowed_apps": list(app.config["ALLOWED_APP_NAMES"]),
                 "trial_days": app.config["TRIAL_DAYS"],
+                "schema_version": SCHEMA_VERSION,
             }
         )
 
@@ -172,7 +195,7 @@ def create_app():
                 machine_code=data.get("machine_code"), action=data.get("action"),
             ))
         except ValueError as exc:
-            return _error(str(exc))
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
 
     @app.post("/api/v1/trial/apply")
     def apply_trial():
@@ -203,11 +226,11 @@ def create_app():
             )
             return _ok(issued)
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         except PermissionError as exc:
-            return _error(str(exc), 403)
+            return _error(str(exc), getattr(exc, "status", 403), getattr(exc, "code", None))
         except RuntimeError as exc:
-            return _error(str(exc), 409)
+            return _error(str(exc), getattr(exc, "status", 409), getattr(exc, "code", None))
 
     @app.post("/api/v1/licenses/renew")
     def renew():
@@ -243,7 +266,7 @@ def create_app():
             )
             return _ok(issued)
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
 
     @app.post("/api/v1/licenses/offline-issue")
     def offline_issue():
@@ -277,7 +300,7 @@ def create_app():
             )
             return _ok(issued)
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
 
     @app.post("/api/v1/licenses/latest")
     def latest_license():
@@ -290,11 +313,11 @@ def create_app():
                 challenge=data.get("challenge"), signature=data.get("signature"),
             )
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         except PermissionError as exc:
-            return _error(str(exc), 403)
+            return _error(str(exc), getattr(exc, "status", 403), getattr(exc, "code", None))
         if not issued:
-            return _error("no active license", 404)
+            return _error("no active license", 404, "LICENSE_REQUIRED")
         return _ok(issued)
 
     @app.post("/api/v1/devices/register")
@@ -316,9 +339,9 @@ def create_app():
                 license_key="" if admin else license_key,
             )
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         except PermissionError as exc:
-            return _error(str(exc), 403)
+            return _error(str(exc), getattr(exc, "status", 403), getattr(exc, "code", None))
         return _ok({"registered": True})
 
     @app.post("/api/v1/devices/revoke")
@@ -334,7 +357,7 @@ def create_app():
                 app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
             )
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         if not revoked:
             return _error("device not enrolled", 404)
         return _ok({"revoked": True})
@@ -356,7 +379,7 @@ def create_app():
             rows = query_licenses(app, app_name=app_name, machine_code=machine_code)
             return _ok({"items": rows})
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
 
     @app.get("/api/v1/licenses/active_key")
     def admin_active_key():
@@ -373,7 +396,7 @@ def create_app():
         try:
             row = fetch_active_license_key(app, app_name=app_name, machine_code=machine_code)
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         if not row:
             return _error("该设备当前没有有效授权码", 404)
         return _ok(row)
@@ -392,7 +415,7 @@ def create_app():
                 app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
             )
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         return _ok(result)
 
     # ---- 激活码 / 激活 / 在线校验 / 解绑 ----
@@ -419,7 +442,7 @@ def create_app():
                 created_by="admin_api",
             )
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         return _ok(created)
 
     @app.post("/api/v1/activate")
@@ -445,11 +468,11 @@ def create_app():
                 app_version=str(data.get("app_version") or "").strip(),
             )
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         except PermissionError as exc:
-            return _error(str(exc), 403)
+            return _error(str(exc), getattr(exc, "status", 403), getattr(exc, "code", None))
         except RuntimeError as exc:
-            return _error(str(exc), 409)
+            return _error(str(exc), getattr(exc, "status", 409), getattr(exc, "code", None))
         return _ok(issued)
 
     @app.post("/api/v1/validate")
@@ -472,14 +495,79 @@ def create_app():
                 client_ip=request.remote_addr or "",
             )
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
         except PermissionError as exc:
-            return _error(str(exc), 403)
+            return _error(str(exc), getattr(exc, "status", 403), getattr(exc, "code", None))
         return _ok(result)
 
     @app.post("/api/v1/unbind")
-    def admin_unbind_device():
-        """管理员解绑：吊销该机器全部 active 授权并停用设备凭据（换机场景）。"""
+    def unbind_route():
+        """解绑：管理员令牌，或「自助解绑」——本机有效 license_key + 本机设备签名（§8.8）。"""
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        license_key = (data.get("license_key") or "").strip()
+        admin = _require_admin_token(app) is None
+        if not admin and not license_key:
+            return _error("unauthorized", 401)
+        try:
+            if admin:
+                result = unbind_device(
+                    app,
+                    app_name=(data.get("app_name") or "").strip(),
+                    machine_code=(data.get("machine_code") or "").strip(),
+                    created_by="admin_api",
+                )
+            else:
+                result = unbind_device_self(
+                    app,
+                    app_name=(data.get("app_name") or "").strip(),
+                    machine_code=(data.get("machine_code") or "").strip(),
+                    challenge=data.get("challenge"),
+                    signature=data.get("signature"),
+                    license_key=license_key,
+                    client_ip=request.remote_addr or "",
+                    user_agent=request.headers.get("User-Agent") or "",
+                )
+        except ValueError as exc:
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
+        except PermissionError as exc:
+            return _error(str(exc), getattr(exc, "status", 403), getattr(exc, "code", None))
+        return _ok(result)
+
+    @app.post("/api/v1/licenses/transfer")
+    def transfer():
+        """自助换机：持旧机有效授权码 + 新机设备签名，迁移授权到新机器（§8.9）。"""
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        for field in ("app_name", "machine_code", "device_public_key", "challenge", "signature", "license_key"):
+            if not isinstance(data.get(field), str) or not data.get(field).strip():
+                return _error(f"{field} is required")
+        try:
+            issued = transfer_license(
+                app,
+                app_name=data["app_name"].strip(),
+                machine_code=data["machine_code"],
+                device_public_key=data["device_public_key"],
+                challenge=data["challenge"],
+                signature=data["signature"],
+                license_key=data["license_key"].strip(),
+                client_ip=request.remote_addr or "",
+                user_agent=request.headers.get("User-Agent") or "",
+                app_version=str(data.get("app_version") or "").strip(),
+            )
+        except ValueError as exc:
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
+        except PermissionError as exc:
+            return _error(str(exc), getattr(exc, "status", 403), getattr(exc, "code", None))
+        except RuntimeError as exc:
+            return _error(str(exc), getattr(exc, "status", 409), getattr(exc, "code", None))
+        return _ok(issued)
+
+    @app.post("/api/v1/licenses/recovery-codes")
+    def admin_create_recovery_codes():
+        """为设备当前有效授权生成一次性恢复码（管理员，§8.10）。"""
         auth_error = _require_admin_token(app)
         if auth_error:
             return auth_error
@@ -487,15 +575,49 @@ def create_app():
         if not isinstance(data, dict):
             return _error("JSON object required")
         try:
-            result = unbind_device(
+            created = create_recovery_codes(
                 app,
                 app_name=(data.get("app_name") or "").strip(),
                 machine_code=(data.get("machine_code") or "").strip(),
+                count=data.get("count", 3),
+                expires_at=(data.get("expires_at") or "").strip(),
                 created_by="admin_api",
             )
         except ValueError as exc:
-            return _error(str(exc), 400)
-        return _ok(result)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
+        except RuntimeError as exc:
+            return _error(str(exc), getattr(exc, "status", 409), getattr(exc, "code", None))
+        return _ok(created)
+
+    @app.post("/api/v1/licenses/recover")
+    def recover():
+        """凭恢复码恢复授权：设备私钥与 Token 双丢时重新绑定（§8.10）。"""
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error("JSON object required")
+        for field in ("app_name", "machine_code", "code", "device_public_key", "challenge", "signature"):
+            if not isinstance(data.get(field), str) or not data.get(field).strip():
+                return _error(f"{field} is required")
+        try:
+            issued = recover_with_code(
+                app,
+                app_name=data["app_name"].strip(),
+                machine_code=data["machine_code"],
+                code=data["code"],
+                device_public_key=data["device_public_key"],
+                challenge=data["challenge"],
+                signature=data["signature"],
+                client_ip=request.remote_addr or "",
+                user_agent=request.headers.get("User-Agent") or "",
+                app_version=str(data.get("app_version") or "").strip(),
+            )
+        except ValueError as exc:
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
+        except PermissionError as exc:
+            return _error(str(exc), getattr(exc, "status", 403), getattr(exc, "code", None))
+        except RuntimeError as exc:
+            return _error(str(exc), getattr(exc, "status", 409), getattr(exc, "code", None))
+        return _ok(issued)
 
     @app.get("/api/v1/devices")
     def admin_list_devices():
@@ -523,7 +645,7 @@ def create_app():
                 notes=data.get("notes"),
             ))
         except ValueError as exc:
-            return _error(str(exc), 400)
+            return _error(str(exc), getattr(exc, "status", 400), getattr(exc, "code", None))
 
     @app.get("/api/v1/stats")
     def stats():

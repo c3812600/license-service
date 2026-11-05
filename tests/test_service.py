@@ -856,5 +856,506 @@ class LicenseServiceTests(unittest.TestCase):
             self.assertEqual(env.get("HTTP_X_FORWARDED_FOR"), "1.2.3.4")
 
 
+    def test_error_envelope_always_carries_code(self):
+        """契约：错误信封恒为 {ok:false,error,code}；成功响应不含 code。"""
+        ok = self.client.get("/api/v1/health")
+        self.assertEqual(ok.status_code, 200)
+        self.assertNotIn("code", ok.json)
+        self.assertNotIn("code", ok.json["data"])
+
+        bad_json = self.client.post(
+            "/api/v1/trial/apply", data='"x"', content_type="application/json"
+        )
+        self.assertEqual(bad_json.status_code, 400)
+        self.assertEqual(bad_json.json["code"], "INVALID_INPUT")
+
+        missing = self.client.post("/api/v1/trial/apply", json={})
+        self.assertEqual(missing.json["code"], "INVALID_INPUT")
+
+        wrong_admin = self.client.get(
+            "/api/v1/stats", headers={"X-Admin-Token": "nope"}
+        )
+        self.assertEqual(wrong_admin.status_code, 401)
+        self.assertEqual(wrong_admin.json["code"], "UNAUTHORIZED")
+
+        legacy_get = self.client.get("/api/v1/licenses/latest")
+        self.assertEqual(legacy_get.status_code, 405)
+        self.assertEqual(legacy_get.json["code"], "METHOD_NOT_ALLOWED")
+
+        empty_key = self.client.get(
+            "/api/v1/licenses/active_key",
+            query_string={"app_name": "ControlCommand", "machine_code": "A" * 64},
+            headers={"X-Admin-Token": "test-admin"},
+        )
+        self.assertEqual(empty_key.status_code, 404)
+        self.assertEqual(empty_key.json["code"], "NOT_FOUND")
+
+        unknown_app = self.client.post(
+            "/api/v1/devices/challenge",
+            json={"app_name": "Nope", "machine_code": "A" * 64, "action": "trial"},
+        )
+        self.assertEqual(unknown_app.json["code"], "INVALID_INPUT")
+
+        bad_date = self.client.post(
+            "/api/v1/licenses/renew",
+            headers={"X-Admin-Token": "test-admin"},
+            json={
+                "app_name": "ControlCommand", "machine_code": "A" * 64,
+                "expires_at": "not-a-date",
+            },
+        )
+        self.assertEqual(bad_date.status_code, 400)
+        self.assertEqual(bad_date.json["code"], "INVALID_INPUT")
+
+    def test_error_codes_branch_client_flows(self):
+        """按 code 分流：文案不变，code 指明客户端该走哪条路。"""
+        machine = "5" * 64
+        headers = {"X-Admin-Token": "test-admin"}
+
+        # 未登记设备领授权 → LICENSE_REQUIRED（文案沿用 device not enrolled or revoked）
+        unenrolled = self.client.post(
+            "/api/v1/licenses/latest",
+            json=self.device_proof("latest", machine=machine),
+        )
+        self.assertEqual(unenrolled.status_code, 403)
+        self.assertEqual(unenrolled.json["code"], "LICENSE_REQUIRED")
+
+        # 伪签名 → SIGNATURE_INVALID
+        proof = self.device_proof("latest", machine=machine)
+        proof["signature"] = "A" * 86
+        self.apply_trial(machine=machine)
+        forged = self.client.post("/api/v1/licenses/latest", json=proof)
+        self.assertEqual(forged.status_code, 403)
+        self.assertEqual(forged.json["code"], "SIGNATURE_INVALID")
+
+        # 挑战复用（一次性）→ CHALLENGE_INVALID
+        consumed = self.device_proof("latest", machine=machine)
+        self.client.post("/api/v1/licenses/latest", json=consumed)
+        reused = self.client.post("/api/v1/licenses/latest", json=consumed)
+        self.assertEqual(reused.status_code, 403)
+        self.assertEqual(reused.json["code"], "CHALLENGE_INVALID")
+
+        # 吊销设备 → REVOKED（文案仍为 device not enrolled or revoked）
+        self.client.post(
+            "/api/v1/devices/revoke",
+            json={"app_name": "ControlCommand", "machine_code": machine},
+            headers=headers,
+        )
+        revoked = self.client.post(
+            "/api/v1/licenses/latest",
+            json=self.device_proof("latest", machine=machine),
+        )
+        self.assertEqual(revoked.status_code, 403)
+        self.assertEqual(revoked.json["code"], "REVOKED")
+
+        # 他机 Token → MACHINE_MISMATCH
+        other = "6" * 64
+        foreign_key = self.apply_trial(machine=other).json["data"]["license_key"]
+        mine = "7" * 64
+        self.apply_trial(machine=mine)
+        mismatch = self.client.post(
+            "/api/v1/validate",
+            json={**self.device_proof("validate", machine=mine), "license_token": foreign_key},
+        )
+        self.assertEqual(mismatch.status_code, 403)
+        self.assertEqual(mismatch.json["code"], "MACHINE_MISMATCH")
+
+        # 付费机器自领试用 → CONFLICT（已登记设备 + 已有付费授权）
+        paid_machine = "8" * 64
+        self.client.post(
+            "/api/v1/licenses/renew",
+            headers=headers,
+            json={"app_name": "ControlCommand", "machine_code": paid_machine,
+                  "expires_at": "2030-01-01"},
+        )
+        self.client.post(
+            "/api/v1/devices/register",
+            json=self.device_proof("register", machine=paid_machine),
+            headers=headers,
+        )
+        conflict = self.apply_trial(machine=paid_machine)
+        self.assertEqual(conflict.status_code, 403)
+        self.assertEqual(conflict.json["code"], "CONFLICT")
+
+        # 试用到期 → EXPIRED（409）
+        expired_machine = "4" * 64
+        self.apply_trial(machine=expired_machine)
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute("UPDATE license_issues SET expires_at='2020-01-01'")
+        expired = self.apply_trial(machine=expired_machine)
+        self.assertEqual(expired.status_code, 409)
+        self.assertEqual(expired.json["code"], "EXPIRED")
+
+        # 激活码：产品不符 → PRODUCT_MISMATCH；已用 → CONFLICT；码过期 → EXPIRED
+        codes = self._issue_codes(days=30, count=1).json["data"]["codes"]
+        wrong_app_machine = "3" * 64
+        wrong_app_proof = self.device_proof(
+            "activate", machine=wrong_app_machine, app_name="ControlCommand"
+        )
+        # 用其他产品的码（先造一张别的产品的码，但 Config 只放行 ControlCommand，
+        # 这里直接改库把码挂到未授权产品名下，模拟串货）
+        compact = codes[0].replace("-", "")
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE activation_codes SET app_name='E-Player' WHERE code=?", (compact,)
+                )
+        product_mismatch = self.client.post(
+            "/api/v1/activate", json={**wrong_app_proof, "code": codes[0]}
+        )
+        self.assertEqual(product_mismatch.status_code, 400)
+        self.assertEqual(product_mismatch.json["code"], "PRODUCT_MISMATCH")
+
+        reused_code = self._issue_codes(days=30, count=1).json["data"]["codes"][0]
+        machine_c = "2" * 64
+        self.client.post(
+            "/api/v1/activate",
+            json={**self.device_proof("activate", machine=machine_c), "code": reused_code},
+        )
+        machine_d = "1" * 64
+        used = self.client.post(
+            "/api/v1/activate",
+            json={**self.device_proof("activate", machine=machine_d), "code": reused_code.lower()},
+        )
+        self.assertEqual(used.status_code, 400)
+        self.assertEqual(used.json["code"], "CONFLICT")
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE activation_codes SET expires_at='2020-01-01' WHERE status='issued'"
+                )
+        fresh = self._issue_codes(days=30, count=1).json["data"]["codes"][0]
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE activation_codes SET expires_at='2020-01-01' WHERE code=?",
+                    (fresh.replace("-", ""),),
+                )
+        code_expired = self.client.post(
+            "/api/v1/activate",
+            json={**self.device_proof("activate", machine=machine_d), "code": fresh},
+        )
+        self.assertEqual(code_expired.status_code, 400)
+        self.assertEqual(code_expired.json["code"], "EXPIRED")
+
+    def test_rotation_rate_limit_reports_activation_limit(self):
+        """换钥每日 3 次封顶，超限 code=ACTIVATION_LIMIT。"""
+        machine = "E" * 64
+        headers = {"X-Admin-Token": "test-admin"}
+        self.client.post(
+            "/api/v1/licenses/renew",
+            headers=headers,
+            json={"app_name": "ControlCommand", "machine_code": machine,
+                  "expires_at": "2030-01-01"},
+        )
+        license_key = self.client.get(
+            "/api/v1/licenses/active_key",
+            query_string={"app_name": "ControlCommand", "machine_code": machine},
+            headers=headers,
+        ).json["data"]["license_key"]
+        for index in range(3):
+            rotate = self.device_proof(
+                "register", machine=machine, key=Ed25519PrivateKey.generate()
+            )
+            rotate["license_key"] = license_key
+            self.assertEqual(
+                self.client.post("/api/v1/devices/register", json=rotate).status_code,
+                200,
+                f"rotation #{index + 1} should pass",
+            )
+        rotate = self.device_proof(
+            "register", machine=machine, key=Ed25519PrivateKey.generate()
+        )
+        rotate["license_key"] = license_key
+        blocked = self.client.post("/api/v1/devices/register", json=rotate)
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(blocked.json["code"], "ACTIVATION_LIMIT")
+
+
+    def _paid_license(self, machine, expires_at="2030-01-01"):
+        response = self.client.post(
+            "/api/v1/licenses/renew",
+            headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "expires_at": expires_at},
+        )
+        self.assertEqual(response.status_code, 200, response.json)
+        return response.json["data"]["license_key"]
+
+    def test_self_unbind_with_device_signature(self):
+        """自助解绑：license_key + 本机签名双因子，停用本机授权（§8.8 自助模式）。"""
+        machine = "77" * 32
+        trial = self.apply_trial(machine=machine)
+        license_key = trial.json["data"]["license_key"]
+
+        # 无授权凭据且无管理员令牌 → 401
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/unbind", json={"app_name": "ControlCommand", "machine_code": machine}
+            ).status_code,
+            401,
+        )
+
+        # 他机 Token → MACHINE_MISMATCH
+        foreign_key = self.apply_trial(machine="88" * 32).json["data"]["license_key"]
+        mismatch = self.client.post(
+            "/api/v1/unbind",
+            json={**self.device_proof("unbind", machine=machine), "license_key": foreign_key},
+        )
+        self.assertEqual(mismatch.status_code, 403)
+        self.assertEqual(mismatch.json["code"], "MACHINE_MISMATCH")
+
+        # 自助解绑成功
+        first = self.client.post(
+            "/api/v1/unbind",
+            json={**self.device_proof("unbind", machine=machine), "license_key": license_key},
+        )
+        self.assertEqual(first.status_code, 200, first.json)
+        self.assertEqual(first.json["data"]["revoked_issues"], 1)
+        self.assertTrue(first.json["data"]["credential_revoked"])
+
+        latest = self.client.post(
+            "/api/v1/licenses/latest", json=self.device_proof("latest", machine=machine)
+        )
+        self.assertEqual(latest.status_code, 403)
+        self.assertEqual(latest.json["code"], "REVOKED")
+
+    def test_transfer_moves_license_to_new_machine(self):
+        """自助换机主路径：旧机授权迁移到新机，继承有效期，旧机吊销。"""
+        old = "A1" * 32
+        new = "B2" * 32
+        license_key = self._paid_license(old)
+        moved = self.client.post(
+            "/api/v1/licenses/transfer",
+            json={**self.device_proof("transfer", machine=new), "license_key": license_key},
+        )
+        self.assertEqual(moved.status_code, 200, moved.json)
+        data = moved.json["data"]
+        self.assertEqual(data["expires_at"], "2030-01-01")
+        self.assertEqual(data["license_type"], "paid")
+        self.assertEqual(data["channel"], "transfer")
+        self.assertEqual(data["transfer_count"], 1)
+        self.assertEqual(data["transfer_remaining"], 2)
+
+        latest = self.client.post(
+            "/api/v1/licenses/latest", json=self.device_proof("latest", machine=new)
+        )
+        self.assertEqual(latest.status_code, 200, latest.json)
+        self.assertEqual(latest.json["data"]["license_key"], data["license_key"])
+
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/licenses/latest", json=self.device_proof("latest", machine=old)
+            ).status_code,
+            403,
+        )
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            row = conn.execute(
+                "SELECT previous_issue_id, transfer_count, status FROM license_issues WHERE channel='transfer'"
+            ).fetchone()
+        self.assertEqual(row[1], 1)
+        self.assertEqual(row[2], "active")
+        with closing(sqlite3.connect(self.db)) as conn:
+            linked = conn.execute(
+                "SELECT status FROM license_issues WHERE issue_id=?", (row[0],)
+            ).fetchone()
+        self.assertEqual(linked[0], "revoked")
+
+    def test_transfer_limit_blocks_lineage(self):
+        """换机按谱系计次：默认 3 次内可迁移，超限 ACTIVATION_LIMIT。"""
+        current_machine = "C3" * 32
+        current_key = self._paid_license(current_machine)
+        for index in range(3):
+            next_machine = str(index) * 64
+            moved = self.client.post(
+                "/api/v1/licenses/transfer",
+                json={**self.device_proof("transfer", machine=next_machine),
+                      "license_key": current_key},
+            )
+            self.assertEqual(moved.status_code, 200, moved.json)
+            self.assertEqual(moved.json["data"]["transfer_count"], index + 1)
+            current_key = moved.json["data"]["license_key"]
+        blocked = self.client.post(
+            "/api/v1/licenses/transfer",
+            json={**self.device_proof("transfer", machine="9" * 64), "license_key": current_key},
+        )
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(blocked.json["code"], "ACTIVATION_LIMIT")
+
+    def test_transfer_rejects_same_machine_expired_revoked_and_forged(self):
+        machine = "D4" * 32
+        license_key = self._paid_license(machine)
+        same = self.client.post(
+            "/api/v1/licenses/transfer",
+            json={**self.device_proof("transfer", machine=machine), "license_key": license_key},
+        )
+        self.assertEqual(same.status_code, 409)
+        self.assertEqual(same.json["code"], "CONFLICT")
+
+        expired_key = self._paid_license("E5" * 32, expires_at="2020-01-01")
+        expired = self.client.post(
+            "/api/v1/licenses/transfer",
+            json={**self.device_proof("transfer", machine="F6" * 32), "license_key": expired_key},
+        )
+        self.assertEqual(expired.status_code, 403)
+        self.assertEqual(expired.json["code"], "EXPIRED")
+
+        revoked_machine = "A7" * 32
+        revoked_key = self._paid_license(revoked_machine)
+        self.client.post(
+            "/api/v1/unbind",
+            headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": revoked_machine},
+        )
+        revoked = self.client.post(
+            "/api/v1/licenses/transfer",
+            json={**self.device_proof("transfer", machine="B8" * 32), "license_key": revoked_key},
+        )
+        self.assertEqual(revoked.status_code, 403)
+        self.assertEqual(revoked.json["code"], "REVOKED")
+
+        proof = self.device_proof("transfer", machine="C9" * 32)
+        proof["signature"] = "A" * 86
+        forged = self.client.post(
+            "/api/v1/licenses/transfer",
+            json={**proof, "license_key": self._paid_license("D0" * 32)},
+        )
+        self.assertEqual(forged.status_code, 403)
+        self.assertEqual(forged.json["code"], "SIGNATURE_INVALID")
+
+    def test_transfer_preserves_trial_type_and_revokes_old_credential(self):
+        old = "F1" * 32
+        trial = self.apply_trial(machine=old)
+        new = "A2" * 32
+        moved = self.client.post(
+            "/api/v1/licenses/transfer",
+            json={**self.device_proof("transfer", machine=new),
+                  "license_key": trial.json["data"]["license_key"]},
+        )
+        self.assertEqual(moved.status_code, 200, moved.json)
+        self.assertEqual(moved.json["data"]["license_type"], "trial")
+        self.assertEqual(moved.json["data"]["expires_at"], trial.json["data"]["expires_at"])
+        old_latest = self.client.post(
+            "/api/v1/licenses/latest", json=self.device_proof("latest", machine=old)
+        )
+        self.assertEqual(old_latest.status_code, 403)
+        self.assertEqual(old_latest.json["code"], "REVOKED")
+
+
+    def test_recovery_code_same_machine_restores_token(self):
+        """同机恢复：私钥+Token 双丢后凭恢复码换绑公钥，原 Token 原样返还。"""
+        machine = "33" * 32
+        trial = self.apply_trial(machine=machine)
+        created = self.client.post(
+            "/api/v1/licenses/recovery-codes",
+            headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "count": 2},
+        )
+        self.assertEqual(created.status_code, 200, created.json)
+        codes = created.json["data"]["codes"]
+        self.assertEqual(created.json["data"]["issue_id"], trial.json["data"]["issue_id"])
+        self.assertEqual(len(codes), 2)
+
+        # 换新钥（模拟私钥丢失）恢复：同机 → 换绑公钥 + 原 Token 返还
+        new_key = Ed25519PrivateKey.generate()
+        recovered = self.client.post(
+            "/api/v1/licenses/recover",
+            json={
+                **self.device_proof("recover", machine=machine, key=new_key),
+                "code": codes[0],
+            },
+        )
+        self.assertEqual(recovered.status_code, 200, recovered.json)
+        self.assertEqual(recovered.json["data"]["issue_id"], trial.json["data"]["issue_id"])
+        self.assertEqual(recovered.json["data"]["license_key"], trial.json["data"]["license_key"])
+        self.assertEqual(recovered.json["data"]["channel"], "recovery_same")
+
+        latest = self.client.post(
+            "/api/v1/licenses/latest", json=self.device_proof("latest", machine=machine, key=new_key)
+        )
+        self.assertEqual(latest.status_code, 200, latest.json)
+
+        # 一码一次性
+        again = self.client.post(
+            "/api/v1/licenses/recover",
+            json={**self.device_proof("recover", machine=machine, key=new_key), "code": codes[0]},
+        )
+        self.assertEqual(again.status_code, 400)
+        self.assertEqual(again.json["code"], "CONFLICT")
+
+    def test_recovery_code_cross_machine_behaves_like_transfer(self):
+        """异机恢复：旧机解绑、新机签发，继承有效期，不占 transfer_count。"""
+        old = "44" * 32
+        trial = self.apply_trial(machine=old)
+        codes = self.client.post(
+            "/api/v1/licenses/recovery-codes",
+            headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": old, "count": 1},
+        ).json["data"]["codes"]
+
+        new = "55" * 32
+        moved = self.client.post(
+            "/api/v1/licenses/recover",
+            json={**self.device_proof("recover", machine=new), "code": codes[0]},
+        )
+        self.assertEqual(moved.status_code, 200, moved.json)
+        data = moved.json["data"]
+        self.assertEqual(data["channel"], "recovery")
+        self.assertEqual(data["transfer_count"], 0)
+        self.assertEqual(data["expires_at"], trial.json["data"]["expires_at"])
+
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/licenses/latest", json=self.device_proof("latest", machine=old)
+            ).status_code,
+            403,
+        )
+        latest = self.client.post(
+            "/api/v1/licenses/latest", json=self.device_proof("latest", machine=new)
+        )
+        self.assertEqual(latest.status_code, 200, latest.json)
+
+    def test_recovery_code_rejects_bad_input(self):
+        # 无有效授权 → NOT_FOUND
+        missing = self.client.post(
+            "/api/v1/licenses/recovery-codes",
+            headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": "66" * 32},
+        )
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json["code"], "NOT_FOUND")
+
+        machine = "77" * 32
+        self.apply_trial(machine=machine)
+        codes = self.client.post(
+            "/api/v1/licenses/recovery-codes",
+            headers={"X-Admin-Token": "test-admin"},
+            json={"app_name": "ControlCommand", "machine_code": machine, "count": 1},
+        ).json["data"]["codes"]
+
+        # 格式非法
+        bad = self.client.post(
+            "/api/v1/licenses/recover",
+            json={**self.device_proof("recover", machine=machine), "code": "not-a-code"},
+        )
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json["code"], "INVALID_INPUT")
+
+        # 码过期
+        with closing(sqlite3.connect(self.db)) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE recovery_codes SET expires_at='2020-01-01' WHERE status='issued'"
+                )
+        expired = self.client.post(
+            "/api/v1/licenses/recover",
+            json={**self.device_proof("recover", machine=machine), "code": codes[0]},
+        )
+        self.assertEqual(expired.status_code, 400)
+        self.assertEqual(expired.json["code"], "EXPIRED")
+
+
 if __name__ == "__main__":
     unittest.main()

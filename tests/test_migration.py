@@ -123,6 +123,75 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("activation_codes", tables)
         self.assertIn("device_challenges", tables)
 
+    def test_v2_database_gains_transfer_count(self):
+        """v2 库升级到 v3：license_issues 新增 transfer_count，旧行回填 0。"""
+        v2_license_issues = """
+        CREATE TABLE license_issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            issue_id TEXT NOT NULL UNIQUE,
+            app_name TEXT NOT NULL,
+            machine_code_hash TEXT NOT NULL,
+            machine_code_last4 TEXT NOT NULL DEFAULT '',
+            license_type TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            issued_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            customer_name TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            previous_issue_id TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL DEFAULT '',
+            client_ip TEXT NOT NULL DEFAULT '',
+            user_agent TEXT NOT NULL DEFAULT '',
+            app_version TEXT NOT NULL DEFAULT '',
+            license_token TEXT NOT NULL,
+            license_token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute(v2_license_issues)
+            conn.execute(
+                """INSERT INTO license_issues(
+                       issue_id, app_name, machine_code_hash, license_type, channel,
+                       issued_at, expires_at, license_token, license_token_hash)
+                   VALUES ('i1', 'ControlCommand', 'h', 'paid', 'admin_renew',
+                           '2026-01-01T00:00:00Z', '2030-01-01', 'tok', 'hash1')"""
+            )
+            conn.execute("PRAGMA user_version = 2")
+            conn.commit()
+
+        self.assertNotIn("transfer_count", _columns(self.db, "license_issues"))
+        init_db(self.db)
+
+        self.assertIn("transfer_count", _columns(self.db, "license_issues"))
+        self.assertEqual(_user_version(self.db), SCHEMA_VERSION)
+        with closing(sqlite3.connect(self.db)) as conn:
+            value = conn.execute(
+                "SELECT transfer_count FROM license_issues WHERE issue_id='i1'"
+            ).fetchone()[0]
+        self.assertEqual(value, 0)
+
+    def test_v3_database_gains_recovery_codes(self):
+        """v3 库升级到 v4：新增 recovery_codes 表，版本号推进。"""
+        init_db(self.db)
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute("DROP TABLE recovery_codes")
+            conn.execute("PRAGMA user_version = 3")
+            conn.commit()
+
+        init_db(self.db)
+
+        with closing(sqlite3.connect(self.db)) as conn:
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        self.assertIn("recovery_codes", tables)
+        self.assertIn("transfer_count", _columns(self.db, "license_issues"))
+
 
 if __name__ == "__main__":
     unittest.main()

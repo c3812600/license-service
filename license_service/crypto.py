@@ -7,6 +7,8 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from .errors import ForbiddenError, InputError
+
 
 # App-specific prefixes
 TOKEN_PREFIXES = {
@@ -128,16 +130,16 @@ def verify_license_payload(license_key, public_key_path, app_name=None):
     """
     parts = str(license_key or "").strip().split(".")
     if len(parts) != 3:
-        raise ValueError("invalid license_key format")
+        raise InputError("invalid license_key format")
     prefix, payload_b64, signature_b64 = parts
     expected = TOKEN_PREFIXES.get(app_name, TOKEN_PREFIX) if app_name else TOKEN_PREFIX
     if prefix != expected:
-        raise ValueError("license_key prefix mismatch")
+        raise InputError("license_key prefix mismatch", "PRODUCT_MISMATCH")
     try:
         payload_bytes = _b64url_decode(payload_b64)
         signature = _b64url_decode(signature_b64)
     except Exception as exc:
-        raise ValueError("invalid license_key encoding") from exc
+        raise InputError("invalid license_key encoding") from exc
     loaded = serialization.load_pem_public_key(Path(public_key_path).read_bytes())
     der = loaded.public_bytes(
         serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
@@ -145,5 +147,5 @@ def verify_license_payload(license_key, public_key_path, app_name=None):
     try:
         Ed25519PublicKey.from_public_bytes(der[-32:]).verify(signature, payload_bytes)
     except Exception as exc:
-        raise PermissionError("license_key signature invalid") from exc
+        raise ForbiddenError("license_key signature invalid", "SIGNATURE_INVALID") from exc
     return json.loads(payload_bytes.decode("utf-8"))

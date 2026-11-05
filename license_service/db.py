@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 def connect_db(db_path):
@@ -27,6 +27,9 @@ def _migrate(conn):
     v1 -> v2：新增 `activation_codes`（激活码）。纯新增表，`init_db` 的
     `CREATE TABLE IF NOT EXISTS` 已经覆盖，这里只推进版本号，便于后续迁移
     判断起点。
+
+    v2 -> v3：`license_issues` 新增 `transfer_count`（自助换机已迁移次数）。
+    纯新增列、带常量默认值，已有行回填 0；后续迁移用它做按谱系的换机限次。
     """
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
@@ -47,6 +50,14 @@ def _migrate(conn):
             )
     if version < 2:
         # 表结构由 init_db 的 CREATE TABLE IF NOT EXISTS 创建（纯新增，无需回填）
+        pass
+    if version < 3:
+        if "transfer_count" not in _table_columns(conn, "license_issues"):
+            conn.execute(
+                "ALTER TABLE license_issues ADD COLUMN transfer_count INTEGER NOT NULL DEFAULT 0"
+            )
+    if version < 4:
+        # recovery_codes 由 init_db 的 CREATE TABLE IF NOT EXISTS 创建（纯新增，无需回填）
         pass
     if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -71,6 +82,7 @@ def init_db(db_path):
                 customer_name TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
                 previous_issue_id TEXT NOT NULL DEFAULT '',
+                transfer_count INTEGER NOT NULL DEFAULT 0,
                 created_by TEXT NOT NULL DEFAULT '',
                 client_ip TEXT NOT NULL DEFAULT '',
                 user_agent TEXT NOT NULL DEFAULT '',
@@ -153,6 +165,21 @@ def init_db(db_path):
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_codes (
+                code TEXT PRIMARY KEY,
+                app_name TEXT NOT NULL,
+                issue_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'issued',
+                expires_at TEXT NOT NULL DEFAULT '',
+                issued_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                used_at TEXT NOT NULL DEFAULT '',
+                used_machine_code_hash TEXT NOT NULL DEFAULT '',
+                created_by TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         # 表结构就位后再迁移旧库，最后统一建索引：
         # 旧库的 device_challenges 仍是 expires_at 列，先改名才能按新列建索引。
         _migrate(conn)
@@ -179,6 +206,9 @@ def init_db(db_path):
             CREATE INDEX IF NOT EXISTS idx_activation_codes_status
             ON activation_codes(app_name, status)
             """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recovery_codes_issue ON recovery_codes(issue_id)"
         )
         conn.commit()
     finally:

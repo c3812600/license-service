@@ -9,33 +9,34 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .crypto import hash_machine_code, normalize_machine_code
 from .db import connect_db
+from .errors import ForbiddenError, InputError
 
 
 CHALLENGE_TTL_SECONDS = 120
 REGISTER_TTL_SECONDS = 900
 _BASE64URL = re.compile(r"^[A-Za-z0-9_-]+$")
-_ACTIONS = frozenset(("trial", "latest", "register", "validate", "activate"))
+_ACTIONS = frozenset(("trial", "latest", "register", "validate", "activate", "transfer", "unbind", "recover"))
 
 
 def check_machine_code(machine_code):
     if not isinstance(machine_code, str):
-        raise ValueError("invalid machine_code")
+        raise InputError("invalid machine_code")
     code = normalize_machine_code(machine_code)
     if len(code) < 8 or len(code) > 128 or not re.fullmatch(r"[A-Z0-9:_-]+", code):
-        raise ValueError("invalid machine_code")
+        raise InputError("invalid machine_code")
     return code
 
 
 def decode_public_key(encoded):
     if not isinstance(encoded, str) or len(encoded) != 43 or not _BASE64URL.fullmatch(encoded):
-        raise ValueError("invalid device_public_key")
+        raise InputError("invalid device_public_key")
     try:
         raw = base64.urlsafe_b64decode(encoded + "=")
         Ed25519PublicKey.from_public_bytes(raw)
     except (ValueError, binascii.Error) as exc:
-        raise ValueError("invalid device_public_key") from exc
+        raise InputError("invalid device_public_key") from exc
     if len(raw) != 32 or base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii") != encoded:
-        raise ValueError("invalid device_public_key")
+        raise InputError("invalid device_public_key")
     return raw
 
 
@@ -47,7 +48,7 @@ def _signed_message(action, app_name, machine_code, challenge):
 
 def create_challenge(app, *, app_name, machine_code, action):
     if not isinstance(action, str) or action not in _ACTIONS:
-        raise ValueError("invalid action")
+        raise InputError("invalid action")
     code = check_machine_code(machine_code)
     machine_code_hash = hash_machine_code(code, app.config["MACHINE_CODE_SALT"])
     challenge = secrets.token_urlsafe(32)
@@ -74,29 +75,29 @@ def verify_proof(conn, *, app_name, machine_code, machine_code_hash, action, cha
         or not isinstance(signature, str) or len(signature) != 86
         or not _BASE64URL.fullmatch(signature)
     ):
-        raise ValueError("invalid device proof")
+        raise InputError("invalid device proof")
     row = conn.execute(
         """SELECT expires_at_epoch FROM device_challenges
            WHERE challenge=? AND app_name=? AND machine_code_hash=? AND action=?""",
         (challenge, app_name, machine_code_hash, action),
     ).fetchone()
     if not row or row["expires_at_epoch"] <= int(time.time()):
-        raise PermissionError("invalid or expired challenge")
+        raise ForbiddenError("invalid or expired challenge", "CHALLENGE_INVALID")
     try:
         raw_signature = base64.urlsafe_b64decode(signature + "==")
         if len(raw_signature) != 64 or base64.urlsafe_b64encode(raw_signature).rstrip(b"=").decode("ascii") != signature:
-            raise ValueError("invalid device proof")
+            raise InputError("invalid device proof")
         Ed25519PublicKey.from_public_bytes(public_key).verify(
             raw_signature, _signed_message(action, app_name, machine_code, challenge)
         )
     except (InvalidSignature, ValueError, binascii.Error) as exc:
-        raise PermissionError("invalid device proof") from exc
+        raise ForbiddenError("invalid device proof", "SIGNATURE_INVALID") from exc
     deleted = conn.execute(
         "DELETE FROM device_challenges WHERE challenge=? AND expires_at_epoch>?",
         (challenge, int(time.time())),
     )
     if deleted.rowcount != 1:
-        raise PermissionError("invalid or expired challenge")
+        raise ForbiddenError("invalid or expired challenge", "CHALLENGE_INVALID")
 
 
 def device_key(conn, app_name, machine_code_hash):
