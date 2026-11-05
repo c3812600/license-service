@@ -9,6 +9,7 @@
 - [设计规范与对接文档](docs/license-design-spec.md)：机器码、Token 字节格式、DPAPI 存储、防回拨、接口契约，附录含数据模型与迁移约定（附录 I）、Linux 部署运维（附录 J）、持证换钥（§8.5）。
 - [客户端界面规范 Demo](docs/client-ui-demo.html)：单文件参考实现，覆盖正常/到期/未授权/服务器不可达/自愈各状态，含深浅色主题。设计 token 与管理端 `admin.html`、`stats.html` 共用同一套命名。
 - [AGENTS.md](AGENTS.md)：给接手的 AI / 开发者的工作指引（命令、目录、硬约束、自检流程）。
+- [CHANGELOG.md](CHANGELOG.md)：版本变更记录（代码版本与数据库 schema 版本分开记录）。
 
 ## 本仓库接口
 
