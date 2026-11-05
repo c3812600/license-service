@@ -1578,7 +1578,17 @@ python scripts/backup_db.py                       # 默认 -> data/backups/
 python scripts/backup_db.py /path/db /path/out    # 显式指定源目录与备份目录
 ```
 
-恢复流程：停服务 → 用备份文件替换 `data/license-service.db` → 删除同名 `-wal` / `-shm` → 启动 → `curl /api/v1/health` 复核。**密钥与哈希盐必须一起恢复**，否则历史授权无法验证、机器码无法查询。
+**恢复单位 = 数据库 + `keys/ed25519-{private,public}.pem`（必须一体）**。恢复流程：
+停服务 → 用备份文件替换 `data/license-service.db`（并删除同名 `-wal` / `-shm`）→
+还原密钥对与机器码哈希盐 → 启动 → `curl /api/v1/health` 复核。
+只恢复库、缺密钥时服务**拒绝启动**（防信任锚被换，安全设计）——演练已验证该行为。
+
+定期演练（全部 PASS 才算通过）：
+
+```bash
+python scripts/restore_drill.py        # 备份→灾难→恢复→数据/迁移/服务/安全四重校验
+```
+
 
 ### 5. 升级流程与核对清单
 

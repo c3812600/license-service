@@ -9,7 +9,7 @@
 ## 快速开始
 
 ```bash
-python -m pip install -r requirements.txt      # Python 3.10+；Flask>=3、cryptography>=42
+python -m pip install -r requirements.txt      # 开发安装；生产部署用 requirements.lock（精确版本+哈希，pip-compile 生成）
 cp .env.example .env                           # 至少填 ADMIN_TOKEN 与 MACHINE_CODE_SALT
 python app.py                                  # 开发用，默认 8765，禁止直接暴露公网
 
@@ -25,6 +25,10 @@ CI（`.github/workflows/ci.yml`）在 push / PR 时跑同一套测试（Python 3
 
 ```
 app.py                        # 入口：加载 .env 后 create_app()
+requirements.txt              # 依赖范围（开发安装）
+requirements.lock             # 精确版本 + 哈希（pip-compile --generate-hashes，生产安装用它）
+SECURITY.md                   # 漏洞私密披露渠道与支持版本
+CONTRIBUTING.md               # 贡献流程与自检清单
 license_service/
   __init__.py                 # 路由 + 限流 + 错误处理（admin_* 前缀 = 需 X-Admin-Token）
   service.py                  # 业务逻辑：签发/试用/续期/换钥/激活码/校验/解绑/设备档案/统计

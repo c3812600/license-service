@@ -20,7 +20,12 @@ TIMEOUT = 15
 
 
 def call(method, url, body=None, token=None, timeout=TIMEOUT):
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        # 某些 CDN/WAF 会拦截 Python-urllib 默认 UA（403 边缘响应，根本到不了应用）
+        "User-Agent": "license-service-verify/1.0",
+        "Accept": "application/json",
+    }
     if token:
         headers["X-Admin-Token"] = token
     data = json.dumps(body).encode() if body is not None else None
@@ -32,9 +37,14 @@ def call(method, url, body=None, token=None, timeout=TIMEOUT):
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", "replace")
         try:
-            return exc.code, json.loads(raw) if raw else {}
+            payload = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
-            return exc.code, {"ok": False, "error": raw[:200], "code": ""}
+            # 非 JSON 的 403/5xx 多半来自 WAF/反代边缘，不是应用信封
+            hint = "（非应用响应，疑似 WAF/机器人防护拦截）" if exc.code == 403 else ""
+            return exc.code, {"ok": False, "error": raw[:200] + hint, "code": ""}
+        return exc.code, payload
+    except Exception as exc:  # 网络层故障
+        return 0, {"ok": False, "error": str(exc), "code": ""}
     except Exception as exc:  # 网络层故障
         return 0, {"ok": False, "error": str(exc), "code": ""}
 

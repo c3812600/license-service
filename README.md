@@ -71,7 +71,7 @@ Token 格式为 `<产品前缀>.<base64url(payload)>.<base64url(Ed25519签名)>`
 
 ## 部署准备
 
-1. 使用受支持的 Python 环境安装依赖：`python -m pip install -r requirements.txt`。从 `.env.example` 创建本机 `.env`，将管理员 Token 和机器码哈希盐设为随机且私密的值，配置实际允许的产品与试用上限；`.env` 不入库。
+1. 使用受支持的 Python 环境安装依赖：开发用 `python -m pip install -r requirements.txt`；**生产部署用 `requirements.lock`**（`pip-compile --generate-hashes` 生成，精确版本 + 哈希校验，防供应链篡改）。从 `.env.example` 创建本机 `.env`，将管理员 Token 和机器码哈希盐设为随机且私密的值，配置实际允许的产品与试用上限；`.env` 不入库。
 2. 新环境第一次启动可创建 Ed25519 密钥对；**现有服务迁移时必须恢复原私钥、公钥、数据库和原机器码哈希盐，不要重新生成/更改**。任意一把缺失/两把不匹配、或已有数据库但密钥均缺失时服务拒绝启动。生产私钥和数据库（包括 SQLite 的 WAL/SHM）要作为同一恢复点备份；私钥只留服务端，不放进安装包。更改哈希盐会使历史机器码无法查询，并可能重新领取试用。
 3. `python app.py` 仅用于本地开发。公网使用进程管理器和生产 WSGI 服务，反向代理配置 HTTPS、请求体限制、试用限流、管理路径访问控制及健康检查。不要把 Flask 开发服务器直接暴露公网。
 4. 旧版 `GET /api/v1/licenses/latest` 与无设备签名的试用客户端**不兼容**。上线前先更新测试客户端，备份原数据及密钥；现有试用/付费机器若未登记公钥，需要管理员验证身份后调用 `/api/v1/devices/register`，不得仅凭机器码自动迁移。部署后只读核对 `/api/v1/health`、`/api/v1/public-key` 和允许的产品；从安全渠道与客户端内置公钥对拍。签发测试使用独立测试环境，避免占用真实设备试用资格。

@@ -7,6 +7,28 @@
 > 是两套独立的号。schema 变更必须走迁移，详见规范附录 I。
 > 0.x 阶段不承诺接口向后兼容，破坏性变更会在 `Changed` 里显式标注。
 
+## [Unreleased]
+
+### Added
+
+- `SECURITY.md`：漏洞私密披露渠道（GitHub Security Advisories）、支持版本、响应承诺与安全边界；
+- `CONTRIBUTING.md`：开发环境、提交前自检、代码约定与范围说明；
+- `requirements.lock`：`pip-compile --generate-hashes` 生成的精确版本 + 哈希锁（12 个包），
+  生产安装用它防供应链篡改；开发仍用 `requirements.txt`；
+- `scripts/restore_drill.py`：可重复的恢复演练（备份→灾难→恢复→数据/迁移/服务/安全四重校验，
+  9 步全过才算通过），恢复单位固化为「库 + 密钥」一体。
+
+### Fixed
+
+- `scripts/verify_deploy.py`：自带浏览器式 User-Agent——CDN/WAF（如 Cloudflare 机器人防护）
+  会403 拦截 Python-urllib 默认 UA，导致误判全线失败；非 JSON 的 403 现在标注「疑似 WAF 拦截」。
+
+### Changed
+
+- `scripts/deploy.sh`：部署核对挂上 `verify_deploy.py` 全量探测（19 项），
+  设置 `ADMIN_TOKEN` 可附加管理端核对；schema 回滚提示去掉 v1→v2 特例（v2/v3/v4 纯新增、
+  旧代码可跑新库），数据恢复步骤明确要求连同密钥还原。
+
 ## [0.3.0] - 2026-11-05
 
 ### Added

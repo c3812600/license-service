@@ -7,7 +7,7 @@
 #   bash scripts/deploy.sh --no-pull    # 不拉代码，只重启并核对
 #
 # 可用环境变量覆盖：APP_DIR / BASE_URL / BRANCH / PYTHON / DB_PATH / RESTART_CMD /
-#                   SKIP_BACKUP / HEALTH_TIMEOUT
+#                   SKIP_BACKUP / HEALTH_TIMEOUT / ADMIN_TOKEN（传给 verify_deploy 做管理端核对）
 #
 # 失败时会打印精确的回滚步骤（不自动执行回滚，避免二次事故）。
 
@@ -131,17 +131,20 @@ rollback_hint() {
     echo
     echo "================ 回滚步骤 ================"
     echo "1) 代码回退： git -C $APP_DIR checkout $before_sha"
-    if [ "$before_schema" != "$after_schema" ] && [ "$before_schema" = "1" ] && [ "$after_schema" = "2" ]; then
-        echo "2) 数据库回退到 schema v1（v2 只新增了表，回退只需改版本号）："
+    if [ "$before_schema" != "$after_schema" ]; then
+        echo "2) 数据库 schema $before_schema -> $after_schema："
+        echo "   v2/v3/v4 均为纯新增（新表 / 带默认值的新列），旧代码可直接跑在新库上，"
+        echo "   通常只回退代码即可；如需严格回到旧 schema："
         echo "   $PYTHON - <<'PY'"
         echo "import sqlite3; c = sqlite3.connect(\"$DB_PATH\")"
-        echo "c.execute('PRAGMA user_version = 1'); c.commit()"
+        echo "c.execute('PRAGMA user_version = $before_schema'); c.commit()"
         echo "PY"
     else
         echo "2) 数据库 schema：未发生版本变化，无需回退"
     fi
     echo "3) 重启服务，再核对： curl -s $BASE_URL/api/v1/health"
-    echo "4) 如需恢复数据：停服 -> 用本次备份覆盖 $DB_PATH（同时删除 -wal/-shm）-> 启动"
+    echo "4) 如需恢复数据：停服 -> 用本次备份覆盖 $DB_PATH（同时删除 -wal/-shm）"
+    echo "   且必须连同 keys/ed25519-{private,public}.pem 一起还原（缺密钥服务拒绝启动）-> 启动"
     echo "========================================="
 }
 
@@ -215,6 +218,23 @@ check "GET  /admin" "$(http_code GET /admin)" "200"
 check "schema version" "$AFTER_SCHEMA" "$EXPECTED_SCHEMA"
 check "设备数（迁移前后应一致）" "$AFTER_DEVICES" "$BEFORE_DEVICES"
 check "有效授权数（迁移前后应一致）" "$AFTER_ACTIVE" "$BEFORE_ACTIVE"
+
+# 全量端点核对（端点存在性 + 错误信封 code，见 scripts/verify_deploy.py）
+if [ -f scripts/verify_deploy.py ]; then
+    log "运行 verify_deploy 全量核对"
+    verify_rc=0
+    if [ -n "${ADMIN_TOKEN:-}" ]; then
+        "$PYTHON" scripts/verify_deploy.py "$BASE_URL" --admin-token "$ADMIN_TOKEN" || verify_rc=$?
+    else
+        "$PYTHON" scripts/verify_deploy.py "$BASE_URL" || verify_rc=$?
+    fi
+    if [ "$verify_rc" -eq 0 ]; then
+        log "PASS  verify_deploy 全量核对"
+    else
+        fail "verify_deploy 全量核对未通过（设置 ADMIN_TOKEN 可附加管理端核对）"
+        errors=$((errors + 1))
+    fi
+fi
 
 if [ "$errors" -eq 0 ]; then
     log "部署核对全部通过：commit=$(git rev-parse --short HEAD) schema=$AFTER_SCHEMA"
