@@ -4,8 +4,9 @@
 
 ## 文档
 
-- [设计规范与对接文档](docs/license-design-spec.md)：机器码、Token 字节格式、DPAPI 存储、防回拨、接口契约，附录含数据模型与迁移约定（附录 I）、Linux 部署运维（附录 J）。
+- [设计规范与对接文档](docs/license-design-spec.md)：机器码、Token 字节格式、DPAPI 存储、防回拨、接口契约，附录含数据模型与迁移约定（附录 I）、Linux 部署运维（附录 J）、持证换钥（§8.5）。
 - [客户端界面规范 Demo](docs/client-ui-demo.html)：单文件参考实现，覆盖正常/到期/未授权/服务器不可达/自愈各状态，含深浅色主题。设计 token 与管理端 `admin.html`、`stats.html` 共用同一套命名。
+- [AGENTS.md](AGENTS.md)：给接手的 AI / 开发者的工作指引（命令、目录、硬约束、自检流程）。
 
 ## 本仓库接口
 
@@ -21,6 +22,10 @@
 | POST | `/api/v1/licenses/renew` | `X-Admin-Token` | 新签一张授权，**不会自动撤销旧授权** |
 | POST | `/api/v1/licenses/offline-issue` | `X-Admin-Token` | 签发离线授权供手动交付 |
 | GET | `/api/v1/licenses/query` | `X-Admin-Token` | 按产品和机器码查签发记录 |
+| GET | `/api/v1/licenses/active_key` | `X-Admin-Token` | 取该设备当前有效授权码（管理台「📋 授权码」按钮）；无有效授权返回 404 |
+| GET | `/api/v1/devices` | `X-Admin-Token` | 设备列表 + 统计摘要，支持 `q`（机器码/客户/备注模糊搜索）与 `app_name` 过滤 |
+| PATCH | `/api/v1/devices` | `X-Admin-Token` | 编辑设备档案（`customer_name` / `notes`），不动授权 |
+| POST | `/api/v1/devices/forget` | `X-Admin-Token` | **重置设备**：删除该机器码的授权、设备凭证与未用挑战，测试设备可重新试用；不可恢复 |
 | GET | `/api/v1/stats` | `X-Admin-Token` | 统计数据，不返回完整 Token |
 
 请求和响应均为 JSON：成功 `{"ok":true,"data":{...}}`，失败 `{"ok":false,"error":"..."}`；当前不保证返回 `code`。`/admin` 为管理页，`/admin/stats` 为统计页。未配置管理员 Token 时管理 API 不可用；**没有默认管理员 Token**。
@@ -61,7 +66,9 @@ Token 格式为 `<产品前缀>.<base64url(payload)>.<base64url(Ed25519签名)>`
 
 ## 与公网版本的关系
 
-本地工作区已将原先只凭机器码获取完整 Token 的 `GET /api/v1/licenses/latest` 改为设备签名认证的 POST 协议；**此改动尚未部署到 `https://licenses.lonk.vip`，不能以本 README 推断现网能力**。发布前须核对部署 commit、数据库备份及密钥指纹，并按上述步骤完成客户端与已授权设备迁移；不要直接覆盖生产版本。
+`https://licenses.lonk.vip` **已部署设备签名版**：2026-11-05 核对现网 `GET /api/v1/health` 返回 `{"ok":true,"data":{"allowed_apps":[...],"service":"rcc-license-service","trial_days":30}}`，与当前代码一致；只凭机器码取 Token 的旧 `GET /api/v1/licenses/latest` 已下线（返回 405）。各端点的「代码已实现 / 已部署 / 现网可用」三态见规范 §8.1。
+
+现网部署仍不保证与本地 HEAD 完全同源：发布前请用 `git log -1` 记录部署 commit，核对数据库备份与密钥指纹，并按上述步骤完成已授权设备迁移；不要直接覆盖生产版本。
 
 ## 测试
 

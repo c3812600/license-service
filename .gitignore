@@ -9,3 +9,7 @@ keys/
 data/*.db
 license.db
 *.db
+
+# 测试覆盖率产物
+.coverage
+htmlcov/
