@@ -1,0 +1,83 @@
+name: Deploy
+
+# 手动触发，或在 GitHub 发布 Release 时自动部署生产。
+# 需要在仓库 Secrets 中配置：DEPLOY_HOST、DEPLOY_USER、DEPLOY_SSH_KEY
+# 可选：DEPLOY_PORT（默认 22）、DEPLOY_KNOWN_HOSTS（固定主机指纹，推荐）
+# 可选：Variables 中的 DEPLOY_APP_DIR（默认 /www/wwwroot/license-service）
+
+on:
+  workflow_dispatch:
+    inputs:
+      check_only:
+        description: "只做部署后核对（不拉代码、不重启）"
+        type: boolean
+        default: false
+      skip_backup:
+        description: "跳过数据库备份（不推荐）"
+        type: boolean
+        default: false
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy production
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      APP_DIR: ${{ vars.DEPLOY_APP_DIR || '/www/wwwroot/license-service' }}
+      CHECK_ONLY: ${{ inputs.check_only }}
+      SKIP_BACKUP: ${{ inputs.skip_backup }}
+    steps:
+      - name: 检查必需配置
+        run: |
+          missing=0
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "::error::缺少 secret：$name"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: 准备 SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${DEPLOY_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            echo "使用固定的 known_hosts"
+          else
+            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+            echo "::warning::未配置 DEPLOY_KNOWN_HOSTS，已用 ssh-keyscan 临时获取主机指纹，建议尽快固定"
+          fi
+
+      - name: 执行部署脚本
+        run: |
+          args=""
+          if [ "${CHECK_ONLY:-false}" = "true" ]; then args="--check-only"; fi
+          skip="0"
+          if [ "${SKIP_BACKUP:-false}" = "true" ]; then skip="1"; fi
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              "cd '$APP_DIR' && SKIP_BACKUP='$skip' bash scripts/deploy.sh $args"
+
+      - name: 清理密钥
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

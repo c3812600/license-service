@@ -1505,6 +1505,35 @@ PY
 
 **升级后观察 24 小时**：`audit_logs` 里 `validate` / `activate` 是否异常增长、限流是否触发、`latest` 与 `trial` 成功率是否下降。
 
+**CI 一键部署（可选）**
+
+仓库提供 `.github/workflows/deploy.yml` 与 `scripts/deploy.sh`，把上面的流程固化成一条命令；手工部署仍然可用。
+
+| 触发 | 说明 |
+| --- | --- |
+| `workflow_dispatch` | 手动运行；勾 `check_only` 只核对（不拉代码、不重启），勾 `skip_backup` 跳过备份（不推荐） |
+| `release: published` | 发布 GitHub Release 时自动部署 |
+
+需要的仓库配置：
+
+| 类型 | 名称 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| Secrets | `DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` | 是 | 目标机地址、用户、私钥（建议专用 deploy key，仅授权本仓库） |
+| Secrets | `DEPLOY_PORT` / `DEPLOY_KNOWN_HOSTS` | 否 | 端口默认 22；`known_hosts` 用于固定主机指纹（不配则用 `ssh-keyscan`，CI 会告警） |
+| Variables | `DEPLOY_APP_DIR` | 否 | 默认 `/www/wwwroot/license-service` |
+
+`scripts/deploy.sh` 的行为：
+
+1. 记录当前 commit / 设备数 / 有效授权数 / schema 版本；
+2. `scripts/backup_db.py` 热备（`SKIP_BACKUP=1` 可跳过）；
+3. `git fetch` + `git merge --ff-only`（`--no-pull` 可跳过）；
+4. 重启：优先 `RESTART_CMD`，否则调宝塔面板 Python 项目接口（`RestartProject`，缺失时 `StopProject` + `StartProject`）；
+5. 轮询 `/api/v1/health` 直到恢复（默认 90 秒）；
+6. 核对：health、`latest=405`、`validate=400`、`/admin=200`、schema 版本、设备数与授权数；
+7. 任一项不过 → 退出码 2，打印回滚步骤；`--check-only` 只执行第 6、7 步。
+
+首次使用前确认：目标机 `~/.ssh/authorized_keys` 已放 deploy key 公钥，且该用户对 `$APP_DIR` 有 git 拉取与重启项目的权限。
+
 ### 6. 已知缺口
 
 - 反向代理、HTTPS 证书、请求体大小限制、代理层限流都**不在仓库内**，属于面板/宿主机配置；

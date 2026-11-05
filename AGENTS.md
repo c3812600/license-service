@@ -36,7 +36,9 @@ license_service/
 tests/                        # test_service.py（业务）、test_migration.py（schema）
 scripts/backup_db.py          # VACUUM INTO 热备
 scripts/check_docs.py         # 文档内部链接检查（CI 的 docs 任务调用）
+scripts/deploy.sh             # 服务器端部署：备份→拉取→重启→核对→回滚提示
 .github/workflows/ci.yml      # CI：测试（Python 3.10 / 3.12）+ 文档链接
+.github/workflows/deploy.yml  # 部署：手动触发或 Release 发布时 SSH 执行 deploy.sh
 docs/license-design-spec.md   # 唯一权威规范（含数据模型附录 I、运维附录 J）
 ```
 
