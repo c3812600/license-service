@@ -7,6 +7,51 @@
 > 是两套独立的号。schema 变更必须走迁移，详见规范附录 I。
 > 0.x 阶段不承诺接口向后兼容，破坏性变更会在 `Changed` 里显式标注。
 
+## [0.3.0] - 2026-11-05
+
+### Added
+
+- **自助换机 `POST /api/v1/licenses/transfer`**（规范 §8.9）：持旧机有效授权码 + 新机设备签名，
+  一次调用完成「解绑旧机 + 新机签发」，继承原类型与原有效期（`channel=transfer`、`previous_issue_id`
+  串链可追）。换机按谱系计次（`transfer_count`），上限 `LICENSE_SERVICE_TRANSFER_LIMIT`（默认 3），
+  超限 `ACTIVATION_LIMIT`；响应含 `transfer_count` / `transfer_remaining`。
+- **自助解绑**：`POST /api/v1/unbind` 双授权（管理员令牌，或 `license_key` + 本机设备签名双因子），
+  销毁性幂等、无需配额；审计动作 `unbind_self`（§8.8）。
+- **恢复码 `POST /api/v1/licenses/recovery-codes` / `POST /api/v1/licenses/recover`**（规范 §8.10）：
+  设备私钥与 Token 双丢后的一次性恢复通道。同机换绑公钥并原样返还既有 Token（`recovery_same`）；
+  异机等同换机迁移（`recovery`，不占 `transfer_count`）。schema v4 新增 `recovery_codes` 表。
+- **参考客户端 `client/`**：Python 可运行实现——机器码采集（附录 A/K）、Ed25519 密钥持久化
+  （DPAPI / 0600）、设备证明签名、Token 离线验签、防回拨状态（附录 C）、HTTP 客户端。
+  跨语言向量与服务端逐字节一致（`tests/test_reference_client.py`）。
+- **`scripts/verify_deploy.py`**：部署核对脚本（19 项探测覆盖全部端点与错误信封），部署后一键核对。
+- **业务错误码 `code`**：错误信封变为 `{"ok":false,"error":"...","code":"..."}`，
+  新增 `license_service/errors.py`（`InputError`/`ForbiddenError`/`ConflictError` 携带 code）。
+  授权状态码（`MACHINE_MISMATCH`/`EXPIRED`/`SIGNATURE_INVALID`/`REVOKED`/`ACTIVATION_LIMIT`/
+  `LICENSE_REQUIRED`）与接口层码（`INVALID_INPUT`/`PRODUCT_MISMATCH`/`CHALLENGE_INVALID`/`CONFLICT`/
+  `NOT_FOUND`/`UNAUTHORIZED`/`RATE_LIMITED`/`METHOD_NOT_ALLOWED`/`INTERNAL`）见规范 §8.4；
+  客户端按 `code` 分支，不再匹配 `error` 文本（AI 对接的契约依据）。
+- **schema v3 / v4**：`license_issues` 新增 `transfer_count`（旧行回填 0）；新增 `recovery_codes` 表，迁移见规范附录 I。
+- **MIT License**（`LICENSE` 文件），README 补「许可证」一节。
+- `LICENSE_SERVICE_MAX_CONTENT_LENGTH`：请求体上限（默认 64KB，超限 413 `INVALID_INPUT`）。
+- `docs/nginx-sample.conf`：反代参考配置（HTTPS、分接口 IP 限流、请求体上限、管理路径白名单）。
+- `GET /api/v1/health` 返回 `schema_version`，便于部署核对。
+
+### Changed
+
+- 错误文案**保持不变**（兼容旧客户端字符串匹配）；`device not enrolled or revoked` 现按状态携带
+  `LICENSE_REQUIRED`（未登记）或 `REVOKED`（已停用）两种 code，文案本身不变。
+- `expires_at` 等日期参数解析失败的报错统一为 `invalid date format, expected YYYY-MM-DD`
+  （原来是 `strptime` 原始堆栈文案），code=`INVALID_INPUT`。
+- AGENTS.md 硬约束 4 修正：`license_issues.license_token` 存完整 Token 是既定设计
+  （供 `latest`/`active_key` 原样返还），约束改为「不入日志、审计 detail 只放 hash」。
+- 代码内生产拓扑注释泛化，不再含具体内网 IP/主机。
+
+### Tests
+
+- 新增用例覆盖错误信封/错误码分流、换钥限频、换机（主路径/限次/拒绝分支）、自助解绑、
+  恢复码（同机/异机/拒绝分支）、schema v3/v4 迁移、前端契约（接口路径/token/主题）、
+  参考客户端（跨语言向量/Token 验签/防回拨），全量 70+。
+
 ## [0.2.0] - 2026-11-05
 
 ### Added
@@ -100,6 +145,7 @@
 - 41 个用例、覆盖率约 87%（`python -m unittest discover -s tests -v`），
   含 schema 迁移的旧库场景、持证换钥限频、XFF 伪造、并发领取试用。
 
-[Unreleased]: https://github.com/c3812600/license-service/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/c3812600/license-service/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/c3812600/license-service/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/c3812600/license-service/releases/tag/v0.2.0
 [0.1.0]: https://github.com/c3812600/license-service/releases/tag/v0.1.0

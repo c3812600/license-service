@@ -718,13 +718,15 @@ User-Agent: {AppName}-License-Client/{version}
 | `devices/revoke` / `licenses/renew` / `offline-issue` | ✅ | ✅ | ✅ | 管理台在用 |
 | `licenses/query` / `licenses/active_key` | ✅ | ✅ | ✅ | 管理台在用 |
 | `devices`（GET/PATCH）/ `devices/forget` | ✅ | ✅ | ✅ | 管理台在用 |
-| `activation-codes` / `activate`（激活码） | ✅ | ❌ | ❌ | 本次新增，待部署；见 §8.6 |
-| `validate`（在线状态核查） | ✅ | ❌ | ❌ | 本次新增，待部署；见 §8.7 |
-| `unbind`（管理员解绑） | ✅ | ❌ | ❌ | 本次新增，待部署；见 §8.8 |
+| `activation-codes` / `activate`（激活码） | ✅ | ❌ | ❌ | 待部署；见 §8.6 |
+| `validate`（在线状态核查） | ✅ | ❌ | ❌ | 待部署；见 §8.7 |
+| `unbind`（管理员解绑 + 自助解绑） | ✅ | ❌ | ❌ | 待部署；双授权见 §8.8 |
+| `licenses/transfer`（自助换机） | ✅ | ❌ | ❌ | 待部署；见 §8.9 |
+| `licenses/recovery-codes` / `licenses/recover`（恢复码） | ✅ | ❌ | ❌ | 待部署；见 §8.10 |
 | `/admin`、`/admin/stats` | ✅ | ✅ | ✅ | 与 API 同源发布 |
-| 自助解绑（按 `license_id` 计次）、账户级凭据恢复 | ❌ | ❌ | ❌ | 见 §8.2，不阻塞现有闭环 |
+| 账户级凭据恢复（统一身份） | ❌ | ❌ | ❌ | 恢复码已覆盖单授权恢复（§8.10）；账户体系属产品后续 |
 
-> 「已部署」只表示该路径在现网可用，**不代表与本地 HEAD 逐行同源**；发布前仍须用 `git log -1` 记录部署 commit，并复核 `health` 输出与本文档的差异。
+> 「已部署」只表示该路径在现网可用，**不代表与本地 HEAD 逐行同源**；发布前仍须用 `git log -1` 记录部署 commit，并用 `python scripts/verify_deploy.py <现网地址> --admin-token <令牌>` 核对（19 项探测覆盖上表端点与错误信封）。
 
 客户端在拿到 `license_key` 后，**必须本地验签通过才落盘**，不得信任服务端仅返回成功。
 `latest` 的机器码可被获知/仿造，不是身份认证；旧 GET 接口不得继续使用。认证新版的 HTTP 404 仅表示此次查询无可领取的 active 在线授权，路由不存在、网络故障、设备凭据停用或离线授权不能据此判定为许可证吊销。**在线设备的吊销/降期同步已闭环**（`renew`+`supersede` 吊旧签新，`latest` 复查生效，见 §续签）；已下发的离线 Token 收不回（离线验签固有边界）；稳定业务码仍是目标。
@@ -760,9 +762,9 @@ license-service/device/v1
 | 在线校验 / 心跳 | ✅ 已实现（待部署） | `POST /api/v1/validate`：设备签名，返回 `active`/`expired`/`revoked`/`unknown` + `server_time`（§8.7） |
 | 解绑（管理员） | ✅ 已实现（待部署） | `POST /api/v1/unbind`：吊销该机器全部 active 授权 + 停用设备凭据，保留历史记录（§8.8） |
 | 设备换绑（同一机器换公钥） | ✅ 已实现 | 「持证换钥」，见 §8.5 |
-| 设备换绑（换到另一台机器） | ⚠️ 人工流程 | `unbind` 旧机 + `renew` / `offline-issue` 新机；无自助换机 |
-| 自助解绑（按 `license_id` 计次） | ❌ 未实现 | 需要稳定的 `license_id` 与解绑配额模型，当前 `issue_id` 只是签发记录 ID |
-| 账户级凭据恢复 | ❌ 未实现 | 需要账户体系，超出当前「一机一授权」模型 |
+| 设备换绑（换到另一台机器） | ✅ 已实现 | `POST /api/v1/licenses/transfer` 自助换机：持证 + 新机签名迁移授权（§8.9）；仍可 `unbind` 旧机 + `renew` 人工办理 |
+| 自助解绑 | ✅ 已实现 | `/unbind` 双授权：本机 `license_key` + 设备签名即可停用（§8.8 自助模式）；销毁性幂等，无需配额 |
+| 凭据恢复 | ✅ 恢复码已实现 | 管理员签发一次性恢复码（§8.10），私钥+Token 双丢后可换绑/迁移；跨授权的账户级统一恢复仍需账户体系，属产品后续 |
 | 客户端自助离线申请 | ❌ 未实现 | 目前由管理台 `offline-issue` 人工签发 |
 | 吊销查询（独立接口） | ✅ 由 validate 覆盖 | `status=revoked` 即吊销，不单独开接口，避免枚举面 |
 
@@ -770,10 +772,10 @@ license-service/device/v1
 
 1. **`activate` 的语义定为「兑换激活码」**：管理员批量生成高熵码（16 字符 ≈ 80 bit），客户端用设备签名兑换，服务端在同一事务内完成「核销码 + 绑定公钥 + 签发 Token」。不提供「先签发再核销」的双阶段模型，也不支持一个码多次兑换。
 2. **`validate` 只返回状态，不返回新 Token**：避免把心跳做成「无限续期」的旁路；续期仍需 `renew` 或 `latest`。
-3. **`unbind` 只做管理员版**：自助解绑需要配额与 `license_id` 模型，先不做，避免「谁能解绑别人机器」的漏洞。
-4. **`license_id` 仍未引入**：现有 `issue_id` 是签发记录 ID，语义不同；文档里出现 `license_id` 的地方仍属目标。
+3. **`unbind` 自助化以「双因子 + 销毁性」落地**：自助解绑要求 `license_key`（证授权归属）+ 本机设备签名（证机器控制权），缺一不可，不会出现「解绑别人机器」；解绑销毁授权且幂等，因此不需要「按 `license_id` 计次」的配额——迁移限次由 `transfer_count`（§8.9）承担。
+4. **`license_id` 未引入**：现有 `issue_id` 足够串联签发谱系（`previous_issue_id` + `transfer_count`）；恢复码绑定 `issue_id`（§8.10）。文档里出现 `license_id` 的地方仍属远期目标。
 
-> 三项新接口**已实现但尚未部署**（2026-11-05），三态见 §8.1。部署前按附录 J 的备份流程操作；旧客户端不调用这些接口即可，向后兼容。
+> `activate` / `validate` / `unbind` / `licenses/transfer` / `licenses/recovery-codes` / `licenses/recover` **已实现但尚未部署**，三态见 §8.1。部署前按附录 J 的备份流程操作，并用 `scripts/verify_deploy.py` 核对。
 
 ### 3. 网络容错
 
@@ -784,19 +786,39 @@ license-service/device/v1
 
 ### 4. 错误码（客户端可识别）
 
-| code | 含义 | 客户端 UX |
-| --- | --- | --- |
-| `MACHINE_MISMATCH` | 机器码不匹配 | 展示本机机器码，引导换绑 |
-| `EXPIRED` | 已过期 | 提示续费/降级 |
-| `NOT_BEFORE` | 未生效 | 提示生效日 |
-| `SIGNATURE_INVALID` | 签名无效 | 提示重新获取授权 |
-| `REVOKED` | 已吊销 | 强提示联系供应商 |
-| `TIME_ROLLBACK` | 时间回拨/状态异常 | 提示校准时间 |
-| `ACTIVATION_LIMIT` | 绑定次数超限 | 引导解绑或联系供应商 |
-| `SERVICE_UNAVAILABLE` | 服务不可用 | 静默重试，不影响本地有效授权 |
-| `LICENSE_REQUIRED` | 业务 API 未授权 | 进入激活/申请试用页 |
+响应信封为 `{"ok":false,"error":"...","code":"..."}`：`error` 是人类可读文案（兼容契约，保持稳定），**`code` 是机器分支依据**——客户端（含 AI 自动对接）按 `code` 分流，不要匹配 `error` 文本。成功响应 `{"ok":true,"data":...}` 不含 `code`。
 
-> **现状提醒**：本仓库返回的是 `{"ok":false,"error":"..."}` 的人类可读错误串，**尚未返回上表的 `code`**。客户端分支判断请看各接口小节里的真实错误串（如 §8.5），上表是目标契约。
+**授权状态码**（客户端按此决定产品 UX）：
+
+| code | HTTP | 含义 | 客户端 UX |
+| --- | --- | --- | --- |
+| `MACHINE_MISMATCH` | 403 | 机器码/Token 归属不匹配 | 展示本机机器码，引导换绑 |
+| `EXPIRED` | 403/409 | 授权、试用或激活码已过期 | 提示续费/降级（409 为试用已到期不可重领） |
+| `NOT_BEFORE` | — | 未生效（保留，当前载荷无 not_before 字段） | 提示生效日 |
+| `SIGNATURE_INVALID` | 403 | 签名/设备证明无效 | 重新签名或触发换钥（§8.5） |
+| `REVOKED` | 403 | 设备凭据或授权已吊销 | 强提示联系供应商 |
+| `TIME_ROLLBACK` | — | 时间回拨/状态异常（保留，客户端本地检测后自报） | 提示校准时间 |
+| `ACTIVATION_LIMIT` | 403 | 绑定/换钥次数超限 | 引导解绑或联系供应商 |
+| `SERVICE_UNAVAILABLE` | — | 服务不可用（保留，网络层故障不上报到此） | 静默重试，不影响本地有效授权 |
+| `LICENSE_REQUIRED` | 403/404 | 未登记设备或无有效授权 | 进入激活/申请试用页 |
+
+**接口层码**（参数、鉴权与基础设施）：
+
+| code | HTTP | 含义 |
+| --- | --- | --- |
+| `INVALID_INPUT` | 400 | 参数缺失/格式非法（含 `machine_code`、日期、激活码格式） |
+| `PRODUCT_MISMATCH` | 400/403 | 授权码/激活码与产品不符 |
+| `CHALLENGE_INVALID` | 403 | 挑战无效、已过期或已消费（重新获取挑战重试） |
+| `CONFLICT` | 400/403/409 | 与当前状态冲突：付费机自领试用、激活码已用/不可兑换、设备凭据不一致、需管理员登记 |
+| `NOT_FOUND` | 404 | 资源不存在（如设备档案） |
+| `UNAUTHORIZED` | 401 | 管理员令牌缺失或错误 |
+| `RATE_LIMITED` | 429 | 触发接口限流 |
+| `METHOD_NOT_ALLOWED` | 405 | 方法不被允许（旧 `GET /licenses/latest` 恒返回此码） |
+| `INTERNAL` | 500 | 服务端错误（含管理令牌未配置） |
+
+> **同串双码**：`device not enrolled or revoked` 这条文案对应两种状态——未登记 → `LICENSE_REQUIRED`，已停用 → `REVOKED`。文案保持不变以兼容旧客户端，新客户端一律按 `code` 分流。
+>
+> 实现位置：`license_service/errors.py`（`InputError`/`ForbiddenError`/`ConflictError` 携带 `code`），路由层 `_error()` 缺省按 HTTP 状态推导。
 
 ### 5. 持证换钥（设备公钥漂移自愈）
 
@@ -950,22 +972,30 @@ Content-Type: application/json
 - 限流 20 次/分钟/IP；审计动作 `validate`，`detail` 记录状态；
 - **不能**用它延长授权：`expires_at` 以服务端记录为准，心跳只回报。
 
-### 8. 解绑（unbind，管理员）
+### 8. 解绑（unbind，管理员 / 自助）
 
-换机场景：旧机器不再使用，需要让同一份授权转到新机器。
+换机场景：旧机器不再使用，需要让同一份授权转到新机器。双授权模式（与 `devices/register` 同构）：
 
 ```http
 POST /api/v1/unbind
-X-Admin-Token: <管理员令牌>
 Content-Type: application/json
 
+# 管理员
 {"app_name":"ControlCommand","machine_code":"旧机器码"}
+X-Admin-Token: <管理员令牌>
+
+# 自助解绑（双因子）
+{"app_name":"ControlCommand","machine_code":"本机器码",
+ "challenge":"<action=unbind 的挑战>","signature":"<本机签名>","license_key":"<本机有效授权码>"}
 ```
 
 - 服务端把该机器**全部 `active` 授权置为 `revoked`**，并停用设备凭据（`revoked=1`）；
 - 返回 `{"revoked_issues":1,"credential_revoked":true}`；重复调用返回 0 / false（幂等）；
-- 保留签发历史与设备档案，可审计、可追溯；审计动作 `unbind_device`；
-- 之后在新机器上用 `licenses/renew` 或 `offline-issue` 签发即可，旧机器的 `latest` 将返回 403。
+- 保留签发历史与设备档案，可审计、可追溯；审计动作 `unbind_device`（管理员）/ `unbind_self`（自助）；
+- 之后在新机器上用 `licenses/renew`、`offline-issue` 或 `licenses/transfer` 签发即可，旧机器的 `latest` 将返回 403；
+- **自助解绑**：`license_key` 证授权归属 + 本机设备签名（挑战 `action="unbind"`）证机器控制权，
+  两者缺一不可；解绑销毁授权且幂等，无需配额（迁移限次见 §8.9 `transfer_count`）。
+  他机 Token 返回 403 `MACHINE_MISMATCH`；无凭据且无管理员令牌返回 401。
 
 **三个「停用/删除」接口的区别（容易混淆，务必区分）：**
 
@@ -976,6 +1006,100 @@ Content-Type: application/json
 | `devices/forget` | **物理删除**授权、凭据、未用挑战、设备档案 | 不可恢复 | 测试设备重置、重新领取试用 |
 
 ---
+
+### 9. 自助换机（transfer）
+
+持旧机器**有效授权码** + **新机器设备签名**，把授权迁移到新机器，免管理员介入。
+一次调用完成「解绑旧机 + 在新机签发」：旧机全部 `active` 授权被吊销、设备凭据停用，
+`license_key` 对应的那一条按**原类型与原有效期**在新机重新签发（`channel=transfer`，
+`previous_issue_id` 指向旧签发记录，谱系可追）。
+
+```http
+POST /api/v1/licenses/transfer
+Content-Type: application/json
+
+{
+  "app_name": "ControlCommand",
+  "machine_code": "<新机器码>",
+  "device_public_key": "<新机公钥，43 位无填充 base64url>",
+  "challenge": "<action=transfer 的挑战>",
+  "signature": "<新机私钥对规范化消息的签名>",
+  "license_key": "<旧机器的有效授权码>",
+  "app_version": "1.2.3"
+}
+```
+
+- 挑战 `action="transfer"`（TTL 120 秒），签名消息格式与 §8.1 相同，由**新机器**签；
+- `license_key` 的签名、产品、机器绑定、有效期均被核验：机器绑定取自**载荷内的旧机器码**，
+  不接受调用方自报旧机器；同机换钥请走 `devices/register` 持证换钥（§8.5），同机 transfer 返回 409 `CONFLICT`；
+- **换机限次**：按授权谱系计次（`license_issues.transfer_count`，迁移时 `+1` 继承），
+  上限 `LICENSE_SERVICE_TRANSFER_LIMIT`（默认 3）。超限 403 `ACTIVATION_LIMIT`，
+  响应 `data.transfer_count` / `data.transfer_remaining` 告知已用与剩余；
+- 换机**不继承**旧机未迁移的其他授权：旧机全部 `active` 授权一并吊销（换机即弃旧机），
+  只有 `license_key` 指向的那条在新机续生；试用授权同样可迁移（`license_type=trial`）；
+- 审计动作 `license_transfer`，`detail` 记录 `from=<旧 issue_id> to=<新 issue_id> transfer_count=N`；
+- 限流：5 次/分钟/IP（代理层另有示例，见 `docs/nginx-sample.conf`）。
+
+**错误码**（完整表见 §8.4）：
+
+| 场景 | HTTP | code | error 文案 |
+| --- | --- | --- | --- |
+| 授权码签名/格式无效 | 400/403 | `INVALID_INPUT` / `SIGNATURE_INVALID` | `invalid license_key format` / `license_key signature invalid` |
+| 授权码产品不符 | 400 | `PRODUCT_MISMATCH` | `license_key prefix mismatch` |
+| 载荷机器与库内不符 | 403 | `MACHINE_MISMATCH` | `license_key machine mismatch` |
+| 授权已吊销 | 403 | `REVOKED` | `license_key is revoked` |
+| 授权已过期 | 403 | `EXPIRED` | `license_key expired` |
+| 同机换钥走错接口 | 409 | `CONFLICT` | `same machine: use device key rotation via register instead` |
+| 换机超限 | 403 | `ACTIVATION_LIMIT` | `transfer limit exceeded, contact vendor` |
+| 新机凭据被停用/已绑他钥 | 403/403 | `REVOKED` / `CONFLICT` | `device credential revoked` / `device credential mismatch` |
+| 新机签名无效/挑战失效 | 403 | `SIGNATURE_INVALID` / `CHALLENGE_INVALID` | `invalid device proof` / `invalid or expired challenge` |
+
+---
+
+### 10. 恢复码（recovery-codes / recover）
+
+设备私钥与 Token **双双丢失**（DPAPI 损坏、系统重装、文件误删）时的恢复通道。
+管理员为设备当前有效授权签发**一次性恢复码**（16 字符 ≈ 80 bit，格式与激活码同构），
+交由用户**离线保管**；兑换时用新设备密钥重新绑定。
+
+```http
+# 管理员：为该设备当前最优 active 授权生成恢复码
+POST /api/v1/licenses/recovery-codes
+X-Admin-Token: <管理员令牌>
+
+{"app_name":"ControlCommand","machine_code":"机器码","count":3,"expires_at":"2027-01-01"}
+```
+
+```http
+# 用户：凭恢复码 + 新设备签名重新绑定（挑战 action="recover"）
+POST /api/v1/licenses/recover
+
+{"app_name":"ControlCommand","machine_code":"本机器码","code":"XXXX-XXXX-XXXX-XXXX",
+ "device_public_key":"<新公钥>","challenge":"...","signature":"..."}
+```
+
+- **同机恢复**（机器码不变、只是密钥/Token 丢失）：换绑设备公钥并**原样返还既有 Token**
+  （`issue_id` 不动，`channel=recovery_same`）；
+- **异机恢复**（换机器）：等同换机迁移——旧机全部 active 授权吊销、凭据停用，
+  新机按原类型/原有效期签发（`channel=recovery`，`previous_issue_id` 串链）；
+  **不占 `transfer_count`**（恢复码是管理员管控出口，一码一次性）；
+- 恢复码绑定签发时的 `issue_id`：若该授权已被吊销/迁移走，码随之失效（403 `REVOKED`）；
+  管理员可对新签发记录重新发码；可用 `count` 1–10，可设码本身失效日；
+- 恢复码**即重绑授权**：不校验旧公钥一致性/停用状态——换钥与复活凭据正是本流程目的；
+- 审计动作 `issue_recovery_codes`（签发）/ `recover`（兑换，`detail` 记 `channel`）；
+- 限流：`recover` 5 次/分钟/IP；生成接口仅管理员可达。
+
+**错误码**（完整表见 §8.4）：
+
+| 场景 | HTTP | code | error 文案 |
+| --- | --- | --- | --- |
+| 码格式非法 | 400 | `INVALID_INPUT` | `invalid recovery code` |
+| 码已被使用 | 400 | `CONFLICT` | `recovery code already used` |
+| 码已过期 | 400 | `EXPIRED` | `recovery code expired` |
+| 码产品不符 | 400 | `PRODUCT_MISMATCH` | `recovery code app mismatch` |
+| 目标授权不存在/已吊销 | 404/403 | `NOT_FOUND` / `REVOKED` | `recovery target license not found` / `license is revoked` |
+| 目标授权已过期 | 403 | `EXPIRED` | `license_key expired` |
+| 设备无有效授权（生成时） | 404 | `NOT_FOUND` | `该设备当前没有有效授权码` |
 
 ## 九、 公钥管理与轮换
 
@@ -1346,11 +1470,12 @@ ensure_license(silent: bool) -> bool
 | `device_credentials` | 设备 Ed25519 公钥与吊销状态 | 主键 `(app_name, machine_code_hash)` |
 | `device_challenges` | 一次性挑战，短生命周期（120 s / 900 s），用完即删 | 主键 `challenge`（43 字符 base64url）；`idx_device_challenges_expiry(expires_at_epoch)` |
 | `activation_codes` | 一次性激活码（管理员生成、客户端兑换） | 主键 `code`（16 字符规范化后存库）；`idx_activation_codes_status(app_name, status)` |
-| `audit_logs` | 审计流水（签发、试用、换钥、激活、校验、解绑、重置） | 主键 `id` |
+| `recovery_codes` | 一次性恢复码（绑定 `issue_id`，凭据双丢后恢复，§8.10） | 主键 `code`；`idx_recovery_codes_issue(issue_id)` |
+| `audit_logs` | 审计流水（签发、试用、换钥、激活、校验、解绑、重置、换机、恢复） | 主键 `id` |
 
 **关键列：**
 
-- `license_issues`：`issue_id`、`app_name`、`machine_code_hash`、`machine_code_last4`（列表展示用）、`license_type`（`paid` / `trial`）、`channel`、`status`、`issued_at`、`expires_at`、`previous_issue_id`（`supersede` 链路）、`created_by`、`client_ip`、`user_agent`、`app_version`、`license_token`（完整 Token）、`license_token_hash`、`created_at`、`updated_at`。
+- `license_issues`：`issue_id`、`app_name`、`machine_code_hash`、`machine_code_last4`（列表展示用）、`license_type`（`paid` / `trial`）、`channel`、`status`、`issued_at`、`expires_at`、`previous_issue_id`（`supersede` / 换机链路）、`transfer_count`（自助换机已迁移次数，谱系继承 +1，见 §8.9）、`created_by`、`client_ip`、`user_agent`、`app_version`、`license_token`（完整 Token）、`license_token_hash`、`created_at`、`updated_at`。
 - `device_registry`：`machine_code`（**明文**，仅供管理台展示与人工核验；查询一律用 `machine_code_hash`）、`customer_name`、`notes`、`first_seen`、`last_seen`。
 - `device_credentials`：`public_key`（32 字节原始 Ed25519 公钥，BLOB）、`revoked`（0/1，停用后不再允许联网领取，但**不撤销已下发的离线 Token**）。
 - `device_challenges`：`action`（`trial` / `latest` / `register` / `validate` / `activate`）、`expires_at_epoch`。
@@ -1369,13 +1494,15 @@ ensure_license(silent: bool) -> bool
 
 ### 3. 迁移机制（v1 起）
 
-- **版本源**：`PRAGMA user_version`，与 `db.SCHEMA_VERSION` 对应；当前 `2`。
+- **版本源**：`PRAGMA user_version`，与 `db.SCHEMA_VERSION` 对应；当前 `4`。
 - **执行路径**：`create_app()` → `init_db()`：建表（`IF NOT EXISTS`）→ `_migrate()` → 建索引 → 提交。顺序不能调换——旧库的表已存在，必须先改名再按新列名建索引。
 - **幂等**：每次启动都跑，可重复执行；老库只补差异，新库直接落到最新结构。
 - **只前向**：库的 `user_version` 高于代码的 `SCHEMA_VERSION` 时**拒绝启动**（`RuntimeError`），避免旧代码写新库。
 - **环境要求**：迁移用 `ALTER TABLE ... RENAME COLUMN`，需 **SQLite ≥ 3.25**（Python 3.8+ 自带版本满足）。
 - **v1 内容**：`device_challenges.expires_at` → `expires_at_epoch`，数据原样保留，旧索引由 SQLite 自动改写。
 - **v2 内容**：新增 `activation_codes` 表（纯新增，由 `CREATE TABLE IF NOT EXISTS` 落地，无数据回填）。
+- **v3 内容**：`license_issues` 新增 `transfer_count INTEGER NOT NULL DEFAULT 0`（纯新增列，常量默认值回填，自助换机限次用，见 §8.9）。
+- **v4 内容**：新增 `recovery_codes` 表（纯新增，由 `CREATE TABLE IF NOT EXISTS` 落地，恢复码见 §8.10）。
 
 ### 4. 升级与回滚
 

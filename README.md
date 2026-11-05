@@ -6,7 +6,9 @@
 
 ## 文档
 
-- [设计规范与对接文档](docs/license-design-spec.md)：机器码、Token 字节格式、DPAPI 存储、防回拨、接口契约，附录含数据模型与迁移约定（附录 I）、Linux 部署运维（附录 J）、持证换钥（§8.5）。
+- [设计规范与对接文档](docs/license-design-spec.md)：机器码、Token 字节格式、DPAPI 存储、防回拨、接口契约，附录含数据模型与迁移约定（附录 I）、Linux 部署运维（附录 J）、持证换钥（§8.5）、自助换机（§8.9）。
+- [Nginx 反代示例](docs/nginx-sample.conf)：HTTPS、分接口 IP 限流、请求体上限、管理路径白名单的参考配置。
+- [参考客户端](client/)：Python 可运行实现（机器码采集、密钥持久化、设备证明、Token 离线验签、防回拨状态），跨语言对接看 `client/protocol.py` 与测试向量。
 - [客户端界面规范 Demo](docs/client-ui-demo.html)：单文件参考实现，覆盖正常/到期/未授权/服务器不可达/自愈各状态，含深浅色主题。设计 token 与管理端 `admin.html`、`stats.html` 共用同一套命名。
 - [AGENTS.md](AGENTS.md)：给接手的 AI / 开发者的工作指引（命令、目录、硬约束、自检流程）。
 - [CHANGELOG.md](CHANGELOG.md)：版本变更记录（代码版本与数据库 schema 版本分开记录）。
@@ -32,10 +34,13 @@
 | POST | `/api/v1/activation-codes` | `X-Admin-Token` | 批量生成一次性激活码（`days` 必填，`count` 1–100，可设码失效日） |
 | POST | `/api/v1/activate` | 设备签名 | 兑换激活码：同一事务内核销 + 绑定公钥 + 签发 Token（规范 §8.6） |
 | POST | `/api/v1/validate` | 已登记设备签名 | 在线状态核查，返回 `active`/`expired`/`revoked`/`unknown` 与 `server_time`；不签发新 Token（§8.7） |
-| POST | `/api/v1/unbind` | `X-Admin-Token` | **解绑**：吊销该机全部 active 授权并停用设备凭据（换机场景，保留历史）（§8.8） |
+| POST | `/api/v1/unbind` | `X-Admin-Token` **或** `license_key` + 本设备签名 | **解绑**：吊销该机全部 active 授权并停用设备凭据；自助模式双因子（§8.8） |
+| POST | `/api/v1/licenses/transfer` | 旧机 `license_key` + 新设备签名 | **自助换机**：授权迁移到新机器（继承有效期，按谱系限次，默认 3 次）（§8.9） |
+| POST | `/api/v1/licenses/recovery-codes` | `X-Admin-Token` | 为设备当前有效授权生成一次性恢复码（1–10 个，可设失效日）（§8.10） |
+| POST | `/api/v1/licenses/recover` | 恢复码 + 新设备签名 | **凭据恢复**：私钥+Token 双丢后换绑/迁移（同机原样返还 Token）（§8.10） |
 | GET | `/api/v1/stats` | `X-Admin-Token` | 统计数据，不返回完整 Token |
 
-请求和响应均为 JSON：成功 `{"ok":true,"data":{...}}`，失败 `{"ok":false,"error":"..."}`；当前不保证返回 `code`。`/admin` 为管理页，`/admin/stats` 为统计页。未配置管理员 Token 时管理 API 不可用；**没有默认管理员 Token**。
+请求和响应均为 JSON：成功 `{"ok":true,"data":{...}}`，失败 `{"ok":false,"error":"...","code":"..."}`。`error` 为人类可读文案（保持稳定以兼容旧客户端），**`code` 为机器可读业务码**（取值与分流见[设计规范 §8.4](docs/license-design-spec.md)），客户端按 `code` 分支。`/admin` 为管理页，`/admin/stats` 为统计页。未配置管理员 Token 时管理 API 不可用；**没有默认管理员 Token**。
 
 ## 设备签名协议
 
@@ -79,4 +84,8 @@ Token 格式为 `<产品前缀>.<base64url(payload)>.<base64url(Ed25519签名)>`
 
 ## 测试
 
-`python -m unittest discover -s tests -v`。测试使用临时数据库和临时密钥，不访问公网，也不会修改生产授权。CI（`.github/workflows/ci.yml`）在 push / PR 时用 Python 3.10 与 3.12 跑同一套测试，并校验文档内部链接（`python scripts/check_docs.py .`）。
+`python -m unittest discover -s tests -v`。测试使用临时数据库和临时密钥，不访问公网，也不会修改生产授权。CI（`.github/workflows/ci.yml`）在 push / PR 时用 Python 3.10 与 3.12 跑同一套测试，并校验文档内部链接（`python scripts/check_docs.py .`）。部署后用 `python scripts/verify_deploy.py <现网地址> --admin-token <令牌>` 核对端点与错误信封（19 项探测）。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE) 开源。
