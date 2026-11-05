@@ -2,12 +2,46 @@ import sqlite3
 from pathlib import Path
 
 
+SCHEMA_VERSION = 1
+
+
 def connect_db(db_path):
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
+
+
+def _table_columns(conn, table):
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate(conn):
+    """按 `PRAGMA user_version` 递增执行迁移；每步幂等，可重复调用。
+
+    v0 -> v1：`device_challenges.expires_at`（Unix 秒）改名为 `expires_at_epoch`。
+    该列与 `license_issues.expires_at`（日期文本）同名不同义，改名消除歧义；
+    挑战行本身是短生命周期数据，改名不改变任何业务语义。
+    """
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"database schema v{version} is newer than this build (v{SCHEMA_VERSION}); "
+            "refusing to run migrations"
+        )
+    if version < 1:
+        if sqlite3.sqlite_version_info < (3, 25, 0):
+            raise RuntimeError(
+                "schema migration to v1 requires SQLite >= 3.25 "
+                f"(current {sqlite3.sqlite_version})"
+            )
+        columns = _table_columns(conn, "device_challenges")
+        if "expires_at" in columns and "expires_at_epoch" not in columns:
+            conn.execute(
+                "ALTER TABLE device_challenges RENAME COLUMN expires_at TO expires_at_epoch"
+            )
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def init_db(db_path):
@@ -42,18 +76,6 @@ def init_db(db_path):
         )
         conn.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_license_issues_machine
-            ON license_issues(app_name, machine_code_hash)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_license_issues_type
-            ON license_issues(license_type, status)
-            """
-        )
-        conn.execute(
-            """
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 action TEXT NOT NULL,
@@ -82,9 +104,6 @@ def init_db(db_path):
             """
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_device_registry_last_seen ON device_registry(last_seen)"
-        )
-        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS device_credentials (
                 app_name TEXT NOT NULL,
@@ -103,12 +122,30 @@ def init_db(db_path):
                 app_name TEXT NOT NULL,
                 machine_code_hash TEXT NOT NULL,
                 action TEXT NOT NULL,
-                expires_at INTEGER NOT NULL
+                expires_at_epoch INTEGER NOT NULL
             )
             """
         )
+        # 表结构就位后再迁移旧库，最后统一建索引：
+        # 旧库的 device_challenges 仍是 expires_at 列，先改名才能按新列建索引。
+        _migrate(conn)
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_device_challenges_expiry ON device_challenges(expires_at)"
+            """
+            CREATE INDEX IF NOT EXISTS idx_license_issues_machine
+            ON license_issues(app_name, machine_code_hash)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_license_issues_type
+            ON license_issues(license_type, status)
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_registry_last_seen ON device_registry(last_seen)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_device_challenges_expiry ON device_challenges(expires_at_epoch)"
         )
         conn.commit()
     finally:

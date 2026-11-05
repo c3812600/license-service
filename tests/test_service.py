@@ -295,7 +295,7 @@ class LicenseServiceTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as conn:
             with conn:
                 conn.execute(
-                    "UPDATE device_challenges SET expires_at=0 WHERE challenge=?", (proof["challenge"],)
+                    "UPDATE device_challenges SET expires_at_epoch=0 WHERE challenge=?", (proof["challenge"],)
                 )
         self.assertEqual(self.client.post("/api/v1/licenses/latest", json=proof).status_code, 403)
 

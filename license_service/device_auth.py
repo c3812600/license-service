@@ -49,25 +49,25 @@ def create_challenge(app, *, app_name, machine_code, action):
     if not isinstance(action, str) or action not in _ACTIONS:
         raise ValueError("invalid action")
     code = check_machine_code(machine_code)
-    machine_hash = hash_machine_code(code, app.config["MACHINE_CODE_SALT"])
+    machine_code_hash = hash_machine_code(code, app.config["MACHINE_CODE_SALT"])
     challenge = secrets.token_urlsafe(32)
     ttl = REGISTER_TTL_SECONDS if action == "register" else CHALLENGE_TTL_SECONDS
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
         with conn:
             now = int(time.time())
-            conn.execute("DELETE FROM device_challenges WHERE expires_at<=?", (now,))
+            conn.execute("DELETE FROM device_challenges WHERE expires_at_epoch<=?", (now,))
             conn.execute(
-                """INSERT INTO device_challenges(challenge, app_name, machine_code_hash, action, expires_at)
+                """INSERT INTO device_challenges(challenge, app_name, machine_code_hash, action, expires_at_epoch)
                    VALUES(?,?,?,?,?)""",
-                (challenge, app_name, machine_hash, action, now + ttl),
+                (challenge, app_name, machine_code_hash, action, now + ttl),
             )
     finally:
         conn.close()
     return {"challenge": challenge, "expires_in": ttl}
 
 
-def verify_proof(conn, *, app_name, machine_code, machine_hash, action, challenge, signature, public_key):
+def verify_proof(conn, *, app_name, machine_code, machine_code_hash, action, challenge, signature, public_key):
     if (
         not isinstance(challenge, str) or len(challenge) != 43
         or not _BASE64URL.fullmatch(challenge)
@@ -76,11 +76,11 @@ def verify_proof(conn, *, app_name, machine_code, machine_hash, action, challeng
     ):
         raise ValueError("invalid device proof")
     row = conn.execute(
-        """SELECT expires_at FROM device_challenges
+        """SELECT expires_at_epoch FROM device_challenges
            WHERE challenge=? AND app_name=? AND machine_code_hash=? AND action=?""",
-        (challenge, app_name, machine_hash, action),
+        (challenge, app_name, machine_code_hash, action),
     ).fetchone()
-    if not row or row["expires_at"] <= int(time.time()):
+    if not row or row["expires_at_epoch"] <= int(time.time()):
         raise PermissionError("invalid or expired challenge")
     try:
         raw_signature = base64.urlsafe_b64decode(signature + "==")
@@ -92,16 +92,16 @@ def verify_proof(conn, *, app_name, machine_code, machine_hash, action, challeng
     except (InvalidSignature, ValueError, binascii.Error) as exc:
         raise PermissionError("invalid device proof") from exc
     deleted = conn.execute(
-        "DELETE FROM device_challenges WHERE challenge=? AND expires_at>?",
+        "DELETE FROM device_challenges WHERE challenge=? AND expires_at_epoch>?",
         (challenge, int(time.time())),
     )
     if deleted.rowcount != 1:
         raise PermissionError("invalid or expired challenge")
 
 
-def device_key(conn, app_name, machine_hash):
+def device_key(conn, app_name, machine_code_hash):
     return conn.execute(
         """SELECT public_key, revoked FROM device_credentials
            WHERE app_name=? AND machine_code_hash=?""",
-        (app_name, machine_hash),
+        (app_name, machine_code_hash),
     ).fetchone()

@@ -25,6 +25,14 @@ def _allowed_app_names():
     )
 
 
+def _env_prefixed(name, legacy_name=None):
+    """统一读取 LICENSE_SERVICE_* 前缀的环境变量；legacy_name 兼容旧名。"""
+    value = os.environ.get(name)
+    if value is None and legacy_name:
+        value = os.environ.get(legacy_name)
+    return value
+
+
 def _resolve_path(raw_value, default_relative_path):
     value = (raw_value or "").strip()
     if not value:
@@ -48,10 +56,10 @@ class Config:
         "data/license-service.db",
     )
     PRIVATE_KEY_PATH = _resolve_path(
-        os.environ.get("LICENSE_PRIVATE_KEY_PATH"),
+        _env_prefixed("LICENSE_SERVICE_PRIVATE_KEY_PATH", "LICENSE_PRIVATE_KEY_PATH"),
         "keys/ed25519-private.pem",
     )
     PUBLIC_KEY_PATH = _resolve_path(
-        os.environ.get("LICENSE_PUBLIC_KEY_PATH"),
+        _env_prefixed("LICENSE_SERVICE_PUBLIC_KEY_PATH", "LICENSE_PUBLIC_KEY_PATH"),
         "keys/ed25519-public.pem",
     )

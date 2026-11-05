@@ -14,7 +14,7 @@ from .crypto import ensure_keypair
 from .db import init_db
 from .device_auth import create_challenge
 from .service import (
-    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_machine, query_licenses, register_device, renew_license, revoke_device, validate_app_name, list_devices, update_device_meta, touch_device, fetch_active_license_key,
+    fetch_latest_license, issue_offline_license, issue_trial_license, license_stats, forget_device, query_licenses, register_device, renew_license, revoke_device, validate_app_name, list_devices, update_device_meta, touch_device, fetch_active_license_key,
 )
 
 
@@ -383,7 +383,7 @@ def create_app():
         if not isinstance(data, dict):
             return _error("JSON object required")
         try:
-            result = forget_machine(
+            result = forget_device(
                 app, app_name=data.get("app_name"), machine_code=data.get("machine_code"),
             )
         except ValueError as exc:

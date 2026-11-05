@@ -150,30 +150,30 @@ def issue_trial_license(
         raise ValueError("trial days must be positive")
     requested = trial_days if type(trial_days) is int and trial_days > 0 else maximum
     days = min(requested, maximum)
-    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
         # Serialize claim lookup and issue insertion across workers and processes.
         conn.execute("BEGIN IMMEDIATE")
-        registered = device_key(conn, app_name, machine_hash)
+        registered = device_key(conn, app_name, machine_code_hash)
         if registered and registered["revoked"]:
             raise PermissionError("device credential revoked")
         if registered and registered["public_key"] != public_key:
             raise PermissionError("device credential mismatch")
         verify_proof(
-            conn, app_name=app_name, machine_code=machine_code, machine_hash=machine_hash,
+            conn, app_name=app_name, machine_code=machine_code, machine_code_hash=machine_code_hash,
             action="trial", challenge=challenge, signature=signature, public_key=public_key,
         )
         existing = conn.execute(
             """SELECT issued_at, expires_at FROM license_issues
                WHERE app_name=? AND machine_code_hash=? AND channel='trial_auto'
                ORDER BY id ASC LIMIT 1""",
-            (app_name, machine_hash),
+            (app_name, machine_code_hash),
         ).fetchone()
         if not registered:
             prior = conn.execute(
                 "SELECT 1 FROM license_issues WHERE app_name=? AND machine_code_hash=? LIMIT 1",
-                (app_name, machine_hash),
+                (app_name, machine_code_hash),
             ).fetchone()
             if prior:
                 raise RuntimeError("device enrollment requires admin approval")
@@ -182,12 +182,12 @@ def issue_trial_license(
                    VALUES(?,?,?)
                    ON CONFLICT(app_name, machine_code_hash)
                    DO UPDATE SET public_key=excluded.public_key, revoked=0, updated_at=CURRENT_TIMESTAMP""",
-                (app_name, machine_hash, public_key),
+                (app_name, machine_code_hash, public_key),
             )
         # P0-2: 已有付费/离线/续期授权的机器不得自助领试用（含已登记设备），防试用顶替付费
         non_trial = conn.execute(
             "SELECT 1 FROM license_issues WHERE app_name=? AND machine_code_hash=? AND channel!='trial_auto' LIMIT 1",
-            (app_name, machine_hash),
+            (app_name, machine_code_hash),
         ).fetchone()
         if non_trial:
             raise PermissionError("machine already has paid/offline license; self-service trial not allowed")
@@ -238,17 +238,17 @@ def renew_license(
     if supersede:
         # 客户端取"最长有效期"的 active 授权——缩短有效期必须先吊销旧记录，否则新记录永不生效
         machine_code = check_machine_code(machine_code)
-        machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+        machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
         conn = connect_db(app.config["DATABASE_PATH"])
         try:
             conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute(
                 "UPDATE license_issues SET status='revoked' WHERE app_name=? AND machine_code_hash=? AND status='active'",
-                [app_name, machine_hash],
+                [app_name, machine_code_hash],
             )
             write_audit_log(
                 app, action="supersede_revoke", actor=created_by, app_name=app_name,
-                machine_code_hash=machine_hash,
+                machine_code_hash=machine_code_hash,
                 detail="revoked %d active license(s) before renew to %s" % (cur.rowcount, expires_at),
                 conn=conn,
             )
@@ -425,15 +425,15 @@ def license_stats(app):
 def fetch_latest_license(app, *, app_name, machine_code, challenge, signature):
     validate_app_name(app, app_name)
     machine_code = check_machine_code(machine_code)
-    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
         conn.execute("BEGIN IMMEDIATE")
-        registered = device_key(conn, app_name, machine_hash)
+        registered = device_key(conn, app_name, machine_code_hash)
         if not registered or registered["revoked"]:
             raise PermissionError("device not enrolled or revoked")
         verify_proof(
-            conn, app_name=app_name, machine_code=machine_code, machine_hash=machine_hash,
+            conn, app_name=app_name, machine_code=machine_code, machine_code_hash=machine_code_hash,
             action="latest", challenge=challenge, signature=signature,
             public_key=registered["public_key"],
         )
@@ -449,11 +449,11 @@ def fetch_latest_license(app, *, app_name, machine_code, challenge, signature):
                WHERE app_name=? AND machine_code_hash=? AND status='active'
                  AND expires_at>=? AND channel!='offline_manual'
                ORDER BY CASE WHEN license_type='trial' THEN 1 ELSE 0 END, expires_at DESC, id DESC LIMIT 1""",
-            (app_name, machine_hash, _today().isoformat()),
+            (app_name, machine_code_hash, _today().isoformat()),
         ).fetchone()
         write_audit_log(
             app, action="fetch_latest", actor="device", app_name=app_name,
-            machine_code_hash=machine_hash, issue_id=row["issue_id"] if row else "",
+            machine_code_hash=machine_code_hash, issue_id=row["issue_id"] if row else "",
             detail="active" if row else "none", conn=conn,
         )
         conn.commit()
@@ -465,7 +465,7 @@ def fetch_latest_license(app, *, app_name, machine_code, challenge, signature):
         conn.close()
 
 
-def _verify_rotation_license(app, conn, *, license_key, app_name, machine_code, machine_hash):
+def _verify_rotation_license(app, conn, *, license_key, app_name, machine_code, machine_code_hash):
     """持证换钥的凭证核验：授权码签名/绑定/有效期 + 吊销不复活 + 每机每日限频。"""
     payload = verify_license_payload(
         license_key, app.config["PUBLIC_KEY_PATH"], app_name=app_name,
@@ -476,14 +476,14 @@ def _verify_rotation_license(app, conn, *, license_key, app_name, machine_code, 
         raise PermissionError("license_key machine mismatch")
     if _parse_date(payload.get("expires_at") or "") < _today():
         raise PermissionError("license_key expired")
-    existing = device_key(conn, app_name, machine_hash)
+    existing = device_key(conn, app_name, machine_code_hash)
     if existing and existing["revoked"]:
         raise PermissionError("device credential revoked")
     recent = conn.execute(
         """SELECT COUNT(*) FROM audit_logs
            WHERE action='device_rotate' AND app_name=? AND machine_code_hash=?
              AND created_at >= datetime('now', '-1 day')""",
-        (app_name, machine_hash),
+        (app_name, machine_code_hash),
     ).fetchone()[0]
     if recent >= 3:
         raise PermissionError("rotation rate limit exceeded, retry tomorrow")
@@ -495,7 +495,7 @@ def register_device(app, *, app_name, machine_code, device_public_key, challenge
     validate_app_name(app, app_name)
     machine_code = check_machine_code(machine_code)
     public_key = decode_public_key(device_public_key)
-    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -506,10 +506,10 @@ def register_device(app, *, app_name, machine_code, device_public_key, challenge
             action = "device_rotate"
             _verify_rotation_license(
                 app, conn, license_key=license_key, app_name=app_name,
-                machine_code=machine_code, machine_hash=machine_hash,
+                machine_code=machine_code, machine_code_hash=machine_code_hash,
             )
         verify_proof(
-            conn, app_name=app_name, machine_code=machine_code, machine_hash=machine_hash,
+            conn, app_name=app_name, machine_code=machine_code, machine_code_hash=machine_code_hash,
             action="register", challenge=challenge, signature=signature, public_key=public_key,
         )
         conn.execute(
@@ -517,11 +517,11 @@ def register_device(app, *, app_name, machine_code, device_public_key, challenge
                VALUES(?,?,?,0)
                ON CONFLICT(app_name, machine_code_hash)
                DO UPDATE SET public_key=excluded.public_key, revoked=0, updated_at=CURRENT_TIMESTAMP""",
-            (app_name, machine_hash, public_key),
+            (app_name, machine_code_hash, public_key),
         )
         write_audit_log(
             app, action=action, actor=actor, app_name=app_name,
-            machine_code_hash=machine_hash, conn=conn,
+            machine_code_hash=machine_code_hash, conn=conn,
         )
         conn.commit()
     except Exception:
@@ -534,19 +534,19 @@ def register_device(app, *, app_name, machine_code, device_public_key, challenge
 def revoke_device(app, *, app_name, machine_code):
     validate_app_name(app, app_name)
     machine_code = check_machine_code(machine_code)
-    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
         with conn:
             updated = conn.execute(
                 """UPDATE device_credentials SET revoked=1, updated_at=CURRENT_TIMESTAMP
                    WHERE app_name=? AND machine_code_hash=?""",
-                (app_name, machine_hash),
+                (app_name, machine_code_hash),
             ).rowcount
             if updated:
                 write_audit_log(
                     app, action="revoke_device", actor="admin_api", app_name=app_name,
-                    machine_code_hash=machine_hash, conn=conn,
+                    machine_code_hash=machine_code_hash, conn=conn,
                 )
         return bool(updated)
     finally:
@@ -557,7 +557,7 @@ def touch_device(app, *, app_name, machine_code, customer_name="", notes="", con
     """设备档案 upsert：所有签发入口（试用/续期/离线/注册）收到机器码即建档。
     customer_name/notes 仅在非空时覆盖（保留既有客户信息）。"""
     machine_code = check_machine_code(machine_code)
-    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     own = conn is None  # 外部事务中复用连接（trial 通道），否则自开事务
     if own:
@@ -575,7 +575,7 @@ def touch_device(app, *, app_name, machine_code, customer_name="", notes="", con
                 customer_name = CASE WHEN ? != '' THEN ? ELSE customer_name END,
                 notes = CASE WHEN ? != '' THEN ? ELSE notes END
             """,
-            [app_name, machine_hash, machine_code, customer_name, notes, now, now,
+            [app_name, machine_code_hash, machine_code, customer_name, notes, now, now,
              customer_name, customer_name, notes, notes],
         )
         if own:
@@ -592,7 +592,7 @@ def touch_device(app, *, app_name, machine_code, customer_name="", notes="", con
 def update_device_meta(app, *, app_name, machine_code, customer_name=None, notes=None):
     """编辑设备档案的客户名/备注（列表页维护客户信息）"""
     machine_code = check_machine_code(machine_code)
-    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -603,7 +603,7 @@ def update_device_meta(app, *, app_name, machine_code, customer_name=None, notes
                 notes = COALESCE(?, notes)
             WHERE app_name = ? AND machine_code_hash = ?
             """,
-            [customer_name, notes, app_name, machine_hash],
+            [customer_name, notes, app_name, machine_code_hash],
         )
         conn.commit()
         if cur.rowcount == 0:
@@ -679,34 +679,35 @@ def list_devices(app, *, q="", app_name=""):
         conn.close()
 
 
-def forget_machine(app, *, app_name, machine_code):
+def forget_device(app, *, app_name, machine_code):
     """删除某机器码的全部记录（授权 + 设备凭证 + 未用挑战），
-    让测试设备以"全新机器"重新申请试用/enrollment。管理端专用。"""
+    让测试设备以"全新机器"重新申请试用/enrollment。管理端专用。
+    审计动作名沿用历史值 `forget_machine`，避免已落库的审计记录被割裂。"""
     validate_app_name(app, app_name)
     machine_code = check_machine_code(machine_code)
-    machine_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
+    machine_code_hash = hash_machine_code(machine_code, app.config["MACHINE_CODE_SALT"])
     conn = connect_db(app.config["DATABASE_PATH"])
     try:
         conn.execute("BEGIN IMMEDIATE")
         cred = conn.execute(
             "DELETE FROM device_credentials WHERE app_name=? AND machine_code_hash=?",
-            [app_name, machine_hash],
+            [app_name, machine_code_hash],
         )
         issues = conn.execute(
             "DELETE FROM license_issues WHERE app_name=? AND machine_code_hash=?",
-            [app_name, machine_hash],
+            [app_name, machine_code_hash],
         )
         chall = conn.execute(
             "DELETE FROM device_challenges WHERE app_name=? AND machine_code_hash=?",
-            [app_name, machine_hash],
+            [app_name, machine_code_hash],
         )
         conn.execute(
             "DELETE FROM device_registry WHERE app_name=? AND machine_code_hash=?",
-            [app_name, machine_hash],
+            [app_name, machine_code_hash],
         )
         write_audit_log(
             app, action="forget_machine", actor="admin_api", app_name=app_name,
-            machine_code_hash=machine_hash,
+            machine_code_hash=machine_code_hash,
             detail="removed %d licenses" % issues.rowcount, conn=conn,
         )
         conn.commit()
