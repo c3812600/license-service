@@ -701,11 +701,11 @@ User-Agent: {AppName}-License-Client/{version}
 | 本仓库 | `GET /api/v1/licenses/query`、`GET /api/v1/stats` | `X-Admin-Token` | 仅管理员查询或统计；`/admin`、`/admin/stats` 为管理页面 |
 | **已移除** | `GET /api/v1/licenses/latest` | 现返回 **405** | 旧接口已删除，不能安全认证设备；旧客户端必须升级到设备签名版 |
 | 现网观察 | `GET /api/v1/stats`、`GET /admin/stats` | 未授权时 stats API 返回 401 | 路由可达；未验证管理员实际数据 |
-| 目标未上线（**可选，不阻塞闭环**） | `/api/v1/activate`、`/api/v1/validate` | 接口待定稿 | 在线收紧心跳已由 `latest` + 客户端周期复查覆盖（默认 6 小时，间隔可配）——吊销/降期经 `renew+supersede` 后下次复查即生效；`validate` 仅对非本协议的第三方客户端有价值 |
+| 本仓库（**已部署**） | `POST /api/v1/activation-codes`、`POST /api/v1/activate`、`POST /api/v1/validate`、`POST /api/v1/unbind`、`POST /api/v1/licenses/transfer`、`POST /api/v1/licenses/recovery-codes`、`POST /api/v1/licenses/recover` | 见 §8.6–§8.10 | 激活码兑换、在线状态核查、解绑（双授权）、自助换机、恢复码——2026-11-05 起现网可用 |
 
-**现网部署状态（2026-11-05 核对）**
+**现网部署状态（2026-11-05 核对，V0.3.0 全量）**
 
-判据：现网 `GET /api/v1/health` 返回 `{"ok":true,"data":{"allowed_apps":["ControlCommand","E-Player","WinPilot","iCMS","rust-node"],"service":"rcc-license-service","trial_days":30}}`，与当前代码一致；旧 `GET /api/v1/licenses/latest` 已下线（405）。
+判据：现网 `GET /api/v1/health` 返回 `schema_version=4` 与 `allowed_apps`/`trial_days`，错误信封带业务 `code`（§8.4）；`verify_deploy.py --admin-token` 19/19 全过（公网经 nginx：8766 → gunicorn:8765，日志确认 隧道容器 → nginx → gunicorn）。旧 `GET /api/v1/licenses/latest` 已下线（405）。
 
 | 能力 | 代码已实现 | 已部署 | 现网可用 | 备注 |
 | --- | --- | --- | --- | --- |
@@ -718,18 +718,18 @@ User-Agent: {AppName}-License-Client/{version}
 | `devices/revoke` / `licenses/renew` / `offline-issue` | ✅ | ✅ | ✅ | 管理台在用 |
 | `licenses/query` / `licenses/active_key` | ✅ | ✅ | ✅ | 管理台在用 |
 | `devices`（GET/PATCH）/ `devices/forget` | ✅ | ✅ | ✅ | 管理台在用 |
-| `activation-codes` / `activate`（激活码） | ✅ | ❌ | ❌ | 待部署；见 §8.6 |
-| `validate`（在线状态核查） | ✅ | ❌ | ❌ | 待部署；见 §8.7 |
-| `unbind`（管理员解绑 + 自助解绑） | ✅ | ❌ | ❌ | 待部署；双授权见 §8.8 |
-| `licenses/transfer`（自助换机） | ✅ | ❌ | ❌ | 待部署；见 §8.9 |
-| `licenses/recovery-codes` / `licenses/recover`（恢复码） | ✅ | ❌ | ❌ | 待部署；见 §8.10 |
+| `activation-codes` / `activate`（激活码） | ✅ | ✅ | ✅ | 2026-11-05 部署；见 §8.6 |
+| `validate`（在线状态核查） | ✅ | ✅ | ✅ | 2026-11-05 部署；见 §8.7 |
+| `unbind`（管理员解绑 + 自助解绑） | ✅ | ✅ | ✅ | 2026-11-05 部署；双授权见 §8.8 |
+| `licenses/transfer`（自助换机） | ✅ | ✅ | ✅ | 2026-11-05 部署；见 §8.9 |
+| `licenses/recovery-codes` / `licenses/recover`（恢复码） | ✅ | ✅ | ✅ | 2026-11-05 部署；见 §8.10 |
 | `/admin`、`/admin/stats` | ✅ | ✅ | ✅ | 与 API 同源发布 |
 | 账户级凭据恢复（统一身份） | ❌ | ❌ | ❌ | 恢复码已覆盖单授权恢复（§8.10）；账户体系属产品后续 |
 
 > 「已部署」只表示该路径在现网可用，**不代表与本地 HEAD 逐行同源**；发布前仍须用 `git log -1` 记录部署 commit，并用 `python scripts/verify_deploy.py <现网地址> --admin-token <令牌>` 核对（19 项探测覆盖上表端点与错误信封）。
 
 客户端在拿到 `license_key` 后，**必须本地验签通过才落盘**，不得信任服务端仅返回成功。
-`latest` 的机器码可被获知/仿造，不是身份认证；旧 GET 接口不得继续使用。认证新版的 HTTP 404 仅表示此次查询无可领取的 active 在线授权，路由不存在、网络故障、设备凭据停用或离线授权不能据此判定为许可证吊销。**在线设备的吊销/降期同步已闭环**（`renew`+`supersede` 吊旧签新，`latest` 复查生效，见 §续签）；已下发的离线 Token 收不回（离线验签固有边界）；稳定业务码仍是目标。
+`latest` 的机器码可被获知/仿造，不是身份认证；旧 GET 接口不得继续使用。认证新版的 HTTP 404 仅表示此次查询无可领取的 active 在线授权，路由不存在、网络故障、设备凭据停用或离线授权不能据此判定为许可证吊销。**在线设备的吊销/降期同步已闭环**（`renew`+`supersede` 吊旧签新，`latest` 复查生效，见 §续签）；已下发的离线 Token 收不回（离线验签固有边界）；业务错误码已上线（§8.4，客户端按 `code` 分流）。
 
 **设备签名契约（本仓库实现，需客户端升级；与发行方 Token 的 Ed25519 密钥对完全独立）：**
 
@@ -754,13 +754,13 @@ license-service/device/v1
 
 ### 2. 目标接口的落地状态
 
-早期版本把激活 / 校验 / 解绑列为「目标设计」。其中三项已于 2026-11-05 实现（尚未部署），其余能力仍待产品决策：
+早期版本把激活 / 校验 / 解绑列为「目标设计」。其中大部分已于 2026-11-05 实现并部署（三态见 §8.1），其余能力仍待产品决策：
 
 | 能力 | 状态 | 实现方式 |
 | --- | --- | --- |
-| 激活码兑换 | ✅ 已实现（待部署） | `POST /api/v1/activate`：设备签名 + 一次性核销，签发 Token 并绑定公钥（§8.6） |
-| 在线校验 / 心跳 | ✅ 已实现（待部署） | `POST /api/v1/validate`：设备签名，返回 `active`/`expired`/`revoked`/`unknown` + `server_time`（§8.7） |
-| 解绑（管理员） | ✅ 已实现（待部署） | `POST /api/v1/unbind`：吊销该机器全部 active 授权 + 停用设备凭据，保留历史记录（§8.8） |
+| 激活码兑换 | ✅ 已部署（2026-11-05） | `POST /api/v1/activate`：设备签名 + 一次性核销，签发 Token 并绑定公钥（§8.6） |
+| 在线校验 / 心跳 | ✅ 已部署（2026-11-05） | `POST /api/v1/validate`：设备签名，返回 `active`/`expired`/`revoked`/`unknown` + `server_time`（§8.7） |
+| 解绑（管理员 + 自助） | ✅ 已部署（2026-11-05） | `POST /api/v1/unbind`：吊销该机全部 active 授权 + 停用设备凭据，保留历史（§8.8） |
 | 设备换绑（同一机器换公钥） | ✅ 已实现 | 「持证换钥」，见 §8.5 |
 | 设备换绑（换到另一台机器） | ✅ 已实现 | `POST /api/v1/licenses/transfer` 自助换机：持证 + 新机签名迁移授权（§8.9）；仍可 `unbind` 旧机 + `renew` 人工办理 |
 | 自助解绑 | ✅ 已实现 | `/unbind` 双授权：本机 `license_key` + 设备签名即可停用（§8.8 自助模式）；销毁性幂等，无需配额 |
@@ -775,7 +775,7 @@ license-service/device/v1
 3. **`unbind` 自助化以「双因子 + 销毁性」落地**：自助解绑要求 `license_key`（证授权归属）+ 本机设备签名（证机器控制权），缺一不可，不会出现「解绑别人机器」；解绑销毁授权且幂等，因此不需要「按 `license_id` 计次」的配额——迁移限次由 `transfer_count`（§8.9）承担。
 4. **`license_id` 未引入**：现有 `issue_id` 足够串联签发谱系（`previous_issue_id` + `transfer_count`）；恢复码绑定 `issue_id`（§8.10）。文档里出现 `license_id` 的地方仍属远期目标。
 
-> `activate` / `validate` / `unbind` / `licenses/transfer` / `licenses/recovery-codes` / `licenses/recover` **已实现但尚未部署**，三态见 §8.1。部署前按附录 J 的备份流程操作，并用 `scripts/verify_deploy.py` 核对。
+> `activate` / `validate` / `unbind` / `licenses/transfer` / `licenses/recovery-codes` / `licenses/recover` **已于 2026-11-05 部署现网**（V0.3.0，`verify_deploy.py --admin-token` 19/19 核对通过）；三态见 §8.1，部署运维教训见附录 J。
 
 ### 3. 网络容错
 
@@ -810,6 +810,7 @@ license-service/device/v1
 | `PRODUCT_MISMATCH` | 400/403 | 授权码/激活码与产品不符 |
 | `CHALLENGE_INVALID` | 403 | 挑战无效、已过期或已消费（重新获取挑战重试） |
 | `CONFLICT` | 400/403/409 | 与当前状态冲突：付费机自领试用、激活码已用/不可兑换、设备凭据不一致、需管理员登记 |
+| `FORBIDDEN` | 403 | 被业务规则拒绝且无更具体码（`ForbiddenError` 兜底值；客户端按 `error` 文案提示后转人工） |
 | `NOT_FOUND` | 404 | 资源不存在（如设备档案） |
 | `UNAUTHORIZED` | 401 | 管理员令牌缺失或错误 |
 | `RATE_LIMITED` | 429 | 触发接口限流 |
@@ -1673,10 +1674,30 @@ PY
 
 ### 6. 已知缺口
 
-- 反向代理、HTTPS 证书、请求体大小限制、代理层限流都**不在仓库内**，属于面板/宿主机配置；
+- 反向代理、HTTPS 证书、请求体大小限制、代理层限流都**不在仓库内**，属于面板/宿主机配置（现网已按 `docs/nginx-sample.conf` 隧道变体落地，见 §7）；
 - 没有日志轮转与监控告警配置；
 - 面板生成的 gunicorn 参数（worker 数、超时）不可见，建议至少记录一份到运维笔记；
-- 本附录描述的是「仓库里有什么」，**不代表现网已按此部署**——现网状态见 §8 与 README 的部署说明。
+- 现网状态以 §8.1 三态表与 `scripts/verify_deploy.py` 实测为准。
+
+### 7. 部署实录与教训（V0.3.0，2026-11-05）
+
+现网拓扑：**Cloudflare 隧道（TLS 终结）→ nginx :8766 → gunicorn :8765**，
+管理页与 API 同源，回滚方案 = CF 面板把 Service 改回 `:8765` 一步即可。
+部署验收：`deploy.sh`（备份→拉取→重启→核对，schema v2→v4 迁移生效）+
+`verify_deploy.py --admin-token` 19/19。过程中排掉的四个真实故障，**换环境部署时会再遇到**：
+
+1. **防火墙端口遗漏 → 502**：ufw 只放行了 8765，nginx 改听 8766 后公网 502。
+   开新监听端口时 v4/v6 都要放行。
+2. **限流桶混用**：隧道拓扑下 nginx 看到的来源 IP 全是隧道容器地址（如 `172.x`），
+   按 `$binary_remote_addr` 限流会全站共用一个桶。改为 **`CF-Connecting-IP`**
+   （`map` 空值回落真实来源 IP），实测按访客隔离。只要流量经 CDN/隧道进 nginx，
+   限流键就必须用 CDN 注入的访客 IP 头。
+3. **宝塔 `nginx reload` 不换 worker**：老 worker 常驻旧配置，改了限流配置不生效。
+   需 `nginx -s quit && nginx` 硬重启（等价换 worker）。改限流/监听端口后**必须实测**，
+   不能只看 reload 返回 0。
+4. **面板 venv 出站 HTTPS 缺 CA 链**：脚本走公网 HTTPS 校验需
+   `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`（或装 `certifi`），
+   否则报证书校验失败，与服务本身无关。
 
 ---
 

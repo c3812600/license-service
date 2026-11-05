@@ -4,7 +4,7 @@
 
 - 设计规范与接口契约：[`docs/license-design-spec.md`](docs/license-design-spec.md)（**改代码前先读对应章节**）
 - 客户端界面参考：[`docs/client-ui-demo.html`](docs/client-ui-demo.html)
-- 现网：`https://licenses.lonk.vip` 已部署设备签名版（2026-11-05 核对，详见规范 §8.1）
+- 现网：`https://licenses.lonk.vip` 已部署 **V0.3.0 全量**（2026-11-05，`verify_deploy.py --admin-token` 19/19，详见规范 §8.1）
 
 ## 快速开始
 
@@ -13,7 +13,7 @@ python -m pip install -r requirements.txt      # 开发安装；生产部署用 
 cp .env.example .env                           # 至少填 ADMIN_TOKEN 与 MACHINE_CODE_SALT
 python app.py                                  # 开发用，默认 8765，禁止直接暴露公网
 
-python -m unittest discover -s tests -v        # 全部测试（当前 75 个）
+python -m unittest discover -s tests -v        # 全部测试（当前 82 个，含文档契约测试）
 python -m unittest tests.test_migration -v     # 只跑 schema 迁移测试
 ```
 
@@ -82,7 +82,7 @@ docs/license-design-spec.md   # 唯一权威规范（含数据模型附录 I、�
 - 账户级凭据恢复（统一身份、跨授权恢复）未实现——需要账户体系，属产品决策；单授权恢复走恢复码；
 - 无反向代理/HTTPS/监控的实际配置（属面板与宿主机）；参考配置在 `docs/nginx-sample.conf`；
 - **参考客户端 `client/` 是 Python 实现**；其他语言客户端仓库内无实现（协议见规范 §8 + `client/protocol.py` 测试向量）；
-- `activation-codes` / `activate` / `validate` / `unbind` / `licenses/transfer` / `licenses/recovery-codes` / `licenses/recover` 已实现但**尚未部署**（三态见规范 §8.1，部署后跑 `scripts/verify_deploy.py`）；
+- `activation-codes` / `activate` / `validate` / `unbind` / `licenses/transfer` / `licenses/recovery-codes` / `licenses/recover` **已于 2026-11-05 部署现网**（V0.3.0，`verify_deploy.py --admin-token` 19/19）；改完接口仍要跑 `scripts/verify_deploy.py`；
 
 ## 提交约定
 

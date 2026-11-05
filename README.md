@@ -78,7 +78,7 @@ Token 格式为 `<产品前缀>.<base64url(payload)>.<base64url(Ed25519签名)>`
 
 ## 与公网版本的关系
 
-`https://licenses.lonk.vip` **已部署设备签名版**：2026-11-05 核对现网 `GET /api/v1/health` 返回 `{"ok":true,"data":{"allowed_apps":[...],"service":"rcc-license-service","trial_days":30}}`，与当前代码一致；只凭机器码取 Token 的旧 `GET /api/v1/licenses/latest` 已下线（返回 405）。各端点的「代码已实现 / 已部署 / 现网可用」三态见规范 §8.1。
+`https://licenses.lonk.vip` **已部署 V0.3.0 全量**（2026-11-05）：现网 `GET /api/v1/health` 返回 `schema_version=4` 与允许产品清单，错误信封带业务 `code`；`verify_deploy.py --admin-token` 19/19 全过。只凭机器码取 Token 的旧 `GET /api/v1/licenses/latest` 已下线（返回 405）。拓扑：Cloudflare 隧道 → nginx（8766，分访客限流）→ gunicorn（8765）。各端点的「代码已实现 / 已部署 / 现网可用」三态见规范 §8.1，部署运维教训见附录 J。
 
 现网部署仍不保证与本地 HEAD 完全同源：发布前请用 `git log -1` 记录部署 commit，核对数据库备份与密钥指纹，并按上述步骤完成已授权设备迁移；不要直接覆盖生产版本。
 

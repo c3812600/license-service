@@ -9,6 +9,15 @@
 
 ## [Unreleased]
 
+### Deployed
+
+- **V0.3.0 已部署现网**（2026-11-05）：`https://licenses.lonk.vip` 全量上线
+  （错误码 / 自助换机 / 自助解绑 / 恢复码 / 参考客户端同源），schema v2→v4 迁移生效，
+  `verify_deploy.py --admin-token` 19/19 通过。拓扑：Cloudflare 隧道 → nginx:8766
+  → gunicorn:8765，分访客限流 + 安全头 + 64KB 请求体在 nginx 层，签名协议与错误码
+  在应用层。部署教训（ufw 端口、CF-Connecting-IP 限流键、宝塔 reload 不换 worker、
+  venv 缺 CA 链）记入规范附录 J §7。
+
 ### Added
 
 - `SECURITY.md`：漏洞私密披露渠道（GitHub Security Advisories）、支持版本、响应承诺与安全边界；
@@ -17,9 +26,13 @@
   生产安装用它防供应链篡改；开发仍用 `requirements.txt`；
 - `scripts/restore_drill.py`：可重复的恢复演练（备份→灾难→恢复→数据/迁移/服务/安全四重校验，
   9 步全过才算通过），恢复单位固化为「库 + 密钥」一体。
+- `tests/test_doc_contract.py`：文档↔代码契约测试（路由/错误码/环境变量/表结构/过时标记/
+  敏感物），文档漂移会让测试红，守住「文档是唯一事实源」。
 
 ### Fixed
 
+- 规范 §8.4 补 `FORBIDDEN`（`ForbiddenError` 兜底码，代码在用但文档漏记）；§8.2 三处
+  「已实现（待部署）」翻转为已部署——文档对齐审计发现的漂移。
 - `scripts/verify_deploy.py`：自带浏览器式 User-Agent——CDN/WAF（如 Cloudflare 机器人防护）
   会403 拦截 Python-urllib 默认 UA，导致误判全线失败；非 JSON 的 403 现在标注「疑似 WAF 拦截」。
 
