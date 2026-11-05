@@ -1453,13 +1453,57 @@ python scripts/backup_db.py /path/db /path/out    # 显式指定源目录与备�
 
 恢复流程：停服务 → 用备份文件替换 `data/license-service.db` → 删除同名 `-wal` / `-shm` → 启动 → `curl /api/v1/health` 复核。**密钥与哈希盐必须一起恢复**，否则历史授权无法验证、机器码无法查询。
 
-### 5. 升级流程
+### 5. 升级流程与核对清单
 
-1. `python scripts/backup_db.py` 做一次热备；
-2. 拉取代码（`git pull --ff-only`），确认 `git status` 干净；
-3. 面板重启项目 → 启动时自动执行 schema 迁移；
-4. `curl /api/v1/health` + 管理页抽查；
-5. 观察 `audit_logs` 与限流计数是否异常。
+**升级前（在服务器上执行）**
+
+```bash
+cd /www/wwwroot/license-service
+git log -1 --format='%h %ad %s' --date=iso     # 记录部署基线
+python scripts/backup_db.py                    # VACUUM INTO 热备，输出备份路径
+python - <<'PY'
+import sqlite3; c = sqlite3.connect("data/license-service.db")
+print("schema version:", c.execute("PRAGMA user_version").fetchone()[0])
+print("devices:", c.execute("SELECT COUNT(*) FROM device_registry").fetchone()[0])
+print("active issues:", c.execute("SELECT COUNT(*) FROM license_issues WHERE status='active'").fetchone()[0])
+PY
+```
+
+把上面三个数字记下来（迁移前后必须一致，除新表外）。
+
+**部署**
+
+1. `git pull --ff-only`，确认 `git status` 干净、`git log -1` 是目标 commit；
+2. `python -m pip install -r requirements.txt`（首次引入新依赖时）；
+3. 宝塔面板重启项目 → 启动时 `init_db()` 自动迁移到 **schema v2**。
+
+**升级后核对（预期输出）**
+
+| 检查 | 命令 | 预期 |
+| --- | --- | --- |
+| 健康检查 | `curl -s localhost:8765/api/v1/health` | `{"ok":true,...}`，`allowed_apps` / `trial_days` 与配置一致 |
+| 旧接口已下线 | `curl -s -o /dev/null -w '%{http_code}' localhost:8765/api/v1/licenses/latest` | `405`（若为 200/400，事故，立即回滚） |
+| 新接口已上线 | `curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' localhost:8765/api/v1/validate` | `400`（参数缺失；**404 说明仍是旧代码**） |
+| schema 版本 | 同上 Python 片段 | `schema version: 2` |
+| 数据未丢 | 同上 Python 片段 | `devices` / `active issues` 与升级前一致 |
+| 管理页 | `curl -s -o /dev/null -w '%{http_code}' localhost:8765/admin` | `200` |
+| 备份可用 | `python scripts/backup_db.py` 后打开备份文件 `PRAGMA integrity_check` | `ok` |
+
+**回滚（任一核对项不符时）**
+
+```bash
+git checkout <升级前的 commit>
+python - <<'PY'
+import sqlite3; c = sqlite3.connect("data/license-service.db")
+c.execute("ALTER TABLE device_challenges RENAME COLUMN expires_at_epoch TO expires_at")
+c.execute("PRAGMA user_version = 1")
+c.commit()
+PY
+```
+
+`activation_codes` 表可保留（v1 代码忽略它）。回滚后重启项目，再跑一次上面的健康检查。
+
+**升级后观察 24 小时**：`audit_logs` 里 `validate` / `activate` 是否异常增长、限流是否触发、`latest` 与 `trial` 成功率是否下降。
 
 ### 6. 已知缺口
 

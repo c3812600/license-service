@@ -7,7 +7,7 @@
 > 是两套独立的号。schema 变更必须走迁移，详见规范附录 I。
 > 0.x 阶段不承诺接口向后兼容，破坏性变更会在 `Changed` 里显式标注。
 
-## [Unreleased]
+## [0.2.0] - 2026-11-05
 
 ### Added
 
@@ -100,5 +100,6 @@
 - 41 个用例、覆盖率约 87%（`python -m unittest discover -s tests -v`），
   含 schema 迁移的旧库场景、持证换钥限频、XFF 伪造、并发领取试用。
 
-[Unreleased]: https://github.com/c3812600/license-service/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/c3812600/license-service/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/c3812600/license-service/releases/tag/v0.2.0
 [0.1.0]: https://github.com/c3812600/license-service/releases/tag/v0.1.0
